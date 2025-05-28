@@ -38,6 +38,7 @@ ehthumbs.db
 Thumbs.db
 
 # Environment files
+.envrc
 .env
 .env.local
 .env.production

@@ -17,6 +17,7 @@ import (
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/database"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/logger"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/middleware"
+	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/models"
 	"github.com/gin-gonic/gin"
 )
 
@@ -36,6 +37,20 @@ func main() {
 	// Initialize repositories
 	userRepo := repository.NewUserRepository(db)
 	tenantRepo := repository.NewTenantRepository(db)
+	tenant, err := tenantRepo.GetBySlug("default")
+	if err != nil {
+		logger.Fatal("Failed to check default tenant:", err)
+	}
+	if tenant == nil {
+		defaultTenant := &models.Tenant{
+			Name:   "Default Tenant",
+			Slug:   "default",
+			Status: "active",
+		}
+		if err := tenantRepo.Create(defaultTenant); err != nil {
+			logger.Fatal("Failed to create default tenant:", err)
+		}
+	}
 
 	// Initialize services
 	jwtService := services.NewJWTService(cfg.JWT)
@@ -60,7 +75,7 @@ func main() {
 
 	// Start server in goroutine
 	go func() {
-		logger.Info("Starting server on port", cfg.Server.Port)
+		logger.Info("Starting server on port ", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatal("Failed to start server:", err)
 		}

@@ -1,7 +1,11 @@
--- Create users table
+-- Ensure uuid-ossp extension is available
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
-CREATE TABLE IF NOT EXISTS users (
+-- Create default tenant schema
+CREATE SCHEMA IF NOT EXISTS tenant_default;
+
+-- Create users table in tenant_default schema
+CREATE TABLE IF NOT EXISTS tenant_default.users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     email VARCHAR(255) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
@@ -13,7 +17,7 @@ CREATE TABLE IF NOT EXISTS users (
     deleted_at TIMESTAMP WITH TIME ZONE
 );
 
--- Create index on email for faster lookups
-CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
-CREATE INDEX IF NOT EXISTS idx_users_deleted_at ON users(deleted_at);
+-- Create indexes
+CREATE INDEX IF NOT EXISTS idx_users_email ON tenant_default.users(email);
+CREATE INDEX IF NOT EXISTS idx_users_status ON tenant_default.users(status);
+CREATE INDEX IF NOT EXISTS idx_users_deleted_at ON tenant_default.users(deleted_at);
