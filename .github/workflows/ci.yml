@@ -80,14 +80,6 @@ jobs:
       env:
         DATABASE_URL: postgres://testuser:testpass@localhost:5432/testdb?sslmode=disable
 
-    - name: Generate test report
-      uses: dorny/test-reporter@v1
-      if: success() || failure()
-      with:
-        name: Go Tests
-        path: '*.xml'
-        reporter: java-junit
-
   # ===== SECURITY SCANNING =====
   security:
     name: Security Scan
