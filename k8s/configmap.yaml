@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prism-auth-config
+  namespace: prism-erp
+data:
+  ENVIRONMENT: "production"
+  SERVER_PORT: "8080"
+  LOG_LEVEL: "info"
+  JWT_EXPIRATION: "3600"
+  DB_PORT: "5432"
+  DB_SSL_MODE: "require"
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
