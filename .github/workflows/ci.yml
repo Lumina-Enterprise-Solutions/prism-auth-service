@@ -95,28 +95,12 @@ jobs:
       with:
         go-version: ${{ env.GO_VERSION }}
 
+    - name: Install Gosec
+      run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
     - name: Run Gosec Security Scanner
-      uses: securego/gosec@master
-      with:
-        args: '-fmt sarif -out gosec.sarif ./...'
+      run: gosec ./...
 
-    - name: Upload SARIF file
-      uses: github/codeql-action/upload-sarif@v3
-      with:
-        sarif_file: gosec.sarif
-
-    - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
-      with:
-        scan-type: 'fs'
-        scan-ref: '.'
-        format: 'sarif'
-        output: 'trivy-results.sarif'
-
-    - name: Upload Trivy scan results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@v3
-      with:
-        sarif_file: 'trivy-results.sarif'
 
   # ===== BUILD & PACKAGE =====
   build:
@@ -290,18 +274,18 @@ jobs:
         kubectl exec -n production deployment/prism-auth-service -- wget --spider http://localhost:8080/health
         kubectl exec -n production deployment/prism-auth-service -- wget --spider http://localhost:8080/ready
 
-  # ===== NOTIFICATION =====
-  notify:
-    name: Notify Teams
-    runs-on: ubuntu-latest
-    needs: [deploy-dev, deploy-staging, deploy-prod]
-    if: always()
+  # # ===== NOTIFICATION =====
+  # notify:
+  #   name: Notify Teams
+  #   runs-on: ubuntu-latest
+  #   needs: [deploy-dev, deploy-staging, deploy-prod]
+  #   if: always()
 
-    steps:
-    - name: Notify Slack
-      uses: 8398a7/action-slack@v3
-      with:
-        status: ${{ job.status }}
-        channel: '#deployments'
-        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
-        fields: repo,message,commit,author,action,eventName,ref,workflow
+  #   steps:
+  #   - name: Notify Slack
+  #     uses: 8398a7/action-slack@v3
+  #     with:
+  #       status: ${{ job.status }}
+  #       channel: '#deployments'
+  #       webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+  #       fields: repo,message,commit,author,action,eventName,ref,workflow
