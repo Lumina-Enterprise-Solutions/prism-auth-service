@@ -7,3 +7,4 @@ README.md
 k8s/
 *_test.go
 setup.sh
+Makefile

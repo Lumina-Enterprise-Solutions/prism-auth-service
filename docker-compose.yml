@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: postgres:latest
+    container_name: prism-auth-postgres
+    environment:
+      POSTGRES_DB: prism_auth
+      POSTGRES_USER: prism_user
+      POSTGRES_PASSWORD: prism_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    networks:
+      - prism-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prism_user -d prism_auth"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:latest
+    container_name: prism-auth-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - prism-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: prism-auth-service
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=prism_auth
+      - DATABASE_USER=prism_user
+      - DATABASE_PASSWORD=prism_password
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - JWT_SECRET=your-super-secret-jwt-key-change-in-production
+      - JWT_EXPIRATION_TIME=3600
+      - SERVER_PORT=8080
+      - GIN_MODE=debug
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - prism-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  prism-network:
+    driver: bridge

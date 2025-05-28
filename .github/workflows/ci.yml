@@ -5,73 +5,144 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
+  release:
+    types: [ published ]
 
 env:
-  GO_VERSION: '1.21'
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  GO_VERSION: '1.24'
 
 jobs:
+  # ===== CODE QUALITY & TESTING =====
   test:
+    name: Test & Quality Checks
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:latest
+        env:
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_USER: testuser
+          POSTGRES_DB: testdb
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
         go-version: ${{ env.GO_VERSION }}
 
     - name: Cache Go modules
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
-        path: ~/go/pkg/mod
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
         key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
         restore-keys: |
           ${{ runner.os }}-go-
 
-    - name: Install dependencies
+    - name: Download dependencies
       run: go mod download
 
-    - name: Run linting
-      uses: golangci/golangci-lint-action@v3
+    - name: Verify dependencies
+      run: go mod verify
+
+    - name: Run golangci-lint
+      uses: golangci/golangci-lint-action@v6
       with:
         version: latest
+        args: --timeout=5m
 
-    - name: Run tests
+    - name: Check formatting
       run: |
-        go test -v -race -coverprofile=coverage.out ./...
-        go tool cover -html=coverage.out -o coverage.html
+        gofmt -l .
+        test -z "$(gofmt -l .)"
 
-    - name: Upload coverage reports
-      uses: codecov/codecov-action@v3
+    - name: Run unit tests
+      run: go test -v -race -coverprofile=coverage.out ./...
+      env:
+        DATABASE_URL: postgres://testuser:testpass@localhost:5432/testdb?sslmode=disable
+
+    - name: Run integration tests
+      run: go test -v -tags=integration ./...
+      env:
+        DATABASE_URL: postgres://testuser:testpass@localhost:5432/testdb?sslmode=disable
+
+    - name: Generate test report
+      uses: dorny/test-reporter@v1
+      if: success() || failure()
       with:
-        file: ./coverage.out
+        name: Go Tests
+        path: '*.xml'
+        reporter: java-junit
 
+  # ===== SECURITY SCANNING =====
   security:
+    name: Security Scan
     runs-on: ubuntu-latest
+    needs: test
+
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
 
     - name: Run Gosec Security Scanner
-      uses: securecodewarrior/github-action-gosec@master
+      uses: securego/gosec@master
       with:
-        args: './...'
+        args: '-fmt sarif -out gosec.sarif ./...'
+
+    - name: Upload SARIF file
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: gosec.sarif
 
     - name: Run Trivy vulnerability scanner
       uses: aquasecurity/trivy-action@master
       with:
         scan-type: 'fs'
         scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
 
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  # ===== BUILD & PACKAGE =====
   build:
-    needs: [test, security]
+    name: Build & Package
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    needs: [test, security]
+    if: github.event_name != 'pull_request'
+
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+      image-url: ${{ steps.build.outputs.image-url }}
+
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
 
     - name: Log in to Container Registry
       uses: docker/login-action@v3
@@ -89,21 +160,156 @@ jobs:
           type=ref,event=branch
           type=ref,event=pr
           type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
 
     - name: Build and push Docker image
+      id: build
       uses: docker/build-push-action@v5
       with:
         context: .
+        file: ./docker/Dockerfile
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64,linux/arm64
 
+    - name: Generate SBOM
+      uses: anchore/sbom-action@v0
+      with:
+        image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+        format: spdx-json
+        output-file: sbom.spdx.json
+
+    - name: Upload SBOM
+      uses: actions/upload-artifact@v4
+      with:
+        name: sbom
+        path: sbom.spdx.json
+
+  # ===== DEPLOYMENT - DEVELOPMENT =====
   deploy-dev:
-    if: github.ref == 'refs/heads/develop'
-    needs: build
+    name: Deploy to Development
     runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/develop'
     environment: development
+
     steps:
-    - name: Deploy to development
-      run: echo "Deploy to dev environment"
-      # Add actual deployment steps here
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v4
+      with:
+        version: 'latest'
+
+    - name: Configure kubectl
+      run: |
+        echo "${{ secrets.KUBE_CONFIG_DEV }}" | base64 -d > kubeconfig
+        export KUBECONFIG=kubeconfig
+
+    - name: Deploy to Development
+      run: |
+        export KUBECONFIG=kubeconfig
+        envsubst < k8s/development/deployment.yaml | kubectl apply -f -
+        kubectl rollout status deployment/prism-auth-service -n development
+      env:
+        IMAGE_TAG: ${{ github.sha }}
+        ENVIRONMENT: development
+
+  # ===== DEPLOYMENT - STAGING =====
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    environment: staging
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v4
+      with:
+        version: 'latest'
+
+    - name: Configure kubectl
+      run: |
+        echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > kubeconfig
+        export KUBECONFIG=kubeconfig
+
+    - name: Deploy to Staging
+      run: |
+        export KUBECONFIG=kubeconfig
+        envsubst < k8s/staging/deployment.yaml | kubectl apply -f -
+        kubectl rollout status deployment/prism-auth-service -n staging
+      env:
+        IMAGE_TAG: ${{ github.sha }}
+        ENVIRONMENT: staging
+
+    - name: Run smoke tests
+      run: |
+        # Wait for deployment to be ready
+        sleep 30
+        # Run basic health checks
+        kubectl exec -n staging deployment/prism-auth-service -- wget --spider http://localhost:8080/health
+
+  # ===== DEPLOYMENT - PRODUCTION =====
+  deploy-prod:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'release'
+    environment: production
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v4
+      with:
+        version: 'latest'
+
+    - name: Configure kubectl
+      run: |
+        echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > kubeconfig
+        export KUBECONFIG=kubeconfig
+
+    - name: Deploy to Production
+      run: |
+        export KUBECONFIG=kubeconfig
+        envsubst < k8s/production/deployment.yaml | kubectl apply -f -
+        kubectl rollout status deployment/prism-auth-service -n production
+      env:
+        IMAGE_TAG: ${{ github.event.release.tag_name }}
+        ENVIRONMENT: production
+
+    - name: Run production smoke tests
+      run: |
+        # Wait for deployment to be ready
+        sleep 60
+        # Run comprehensive health checks
+        kubectl exec -n production deployment/prism-auth-service -- wget --spider http://localhost:8080/health
+        kubectl exec -n production deployment/prism-auth-service -- wget --spider http://localhost:8080/ready
+
+  # ===== NOTIFICATION =====
+  notify:
+    name: Notify Teams
+    runs-on: ubuntu-latest
+    needs: [deploy-dev, deploy-staging, deploy-prod]
+    if: always()
+
+    steps:
+    - name: Notify Slack
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        channel: '#deployments'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        fields: repo,message,commit,author,action,eventName,ref,workflow
