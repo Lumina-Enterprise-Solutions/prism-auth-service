@@ -102,177 +102,177 @@ jobs:
       run: gosec ./...
 
 
-  # ===== BUILD & PACKAGE =====
-  build:
-    name: Build & Package
-    runs-on: ubuntu-latest
-    needs: [test, security]
-    if: github.event_name != 'pull_request'
+  # # ===== BUILD & PACKAGE =====
+  # build:
+  #   name: Build & Package
+  #   runs-on: ubuntu-latest
+  #   needs: [test, security]
+  #   if: github.event_name != 'pull_request'
 
-    outputs:
-      image-digest: ${{ steps.build.outputs.digest }}
-      image-url: ${{ steps.build.outputs.image-url }}
+  #   outputs:
+  #     image-digest: ${{ steps.build.outputs.digest }}
+  #     image-url: ${{ steps.build.outputs.image-url }}
 
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+  #   steps:
+  #   - name: Checkout code
+  #     uses: actions/checkout@v4
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+  #   - name: Set up Docker Buildx
+  #     uses: docker/setup-buildx-action@v3
 
-    - name: Log in to Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+  #   - name: Log in to Container Registry
+  #     uses: docker/login-action@v3
+  #     with:
+  #       registry: ${{ env.REGISTRY }}
+  #       username: ${{ github.actor }}
+  #       password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix={{branch}}-
-          type=raw,value=latest,enable={{is_default_branch}}
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
+  #   - name: Extract metadata
+  #     id: meta
+  #     uses: docker/metadata-action@v5
+  #     with:
+  #       images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+  #       tags: |
+  #         type=ref,event=branch
+  #         type=ref,event=pr
+  #         type=sha,prefix={{branch}}-
+  #         type=raw,value=latest,enable={{is_default_branch}}
+  #         type=semver,pattern={{version}}
+  #         type=semver,pattern={{major}}.{{minor}}
 
-    - name: Build and push Docker image
-      id: build
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./docker/Dockerfile
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        platforms: linux/amd64,linux/arm64
+  #   - name: Build and push Docker image
+  #     id: build
+  #     uses: docker/build-push-action@v5
+  #     with:
+  #       context: .
+  #       file: ./docker/Dockerfile
+  #       push: true
+  #       tags: ${{ steps.meta.outputs.tags }}
+  #       labels: ${{ steps.meta.outputs.labels }}
+  #       cache-from: type=gha
+  #       cache-to: type=gha,mode=max
+  #       platforms: linux/amd64,linux/arm64
 
-    - name: Generate SBOM
-      uses: anchore/sbom-action@v0
-      with:
-        image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
-        format: spdx-json
-        output-file: sbom.spdx.json
+  #   - name: Generate SBOM
+  #     uses: anchore/sbom-action@v0
+  #     with:
+  #       image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+  #       format: spdx-json
+  #       output-file: sbom.spdx.json
 
-    - name: Upload SBOM
-      uses: actions/upload-artifact@v4
-      with:
-        name: sbom
-        path: sbom.spdx.json
+  #   - name: Upload SBOM
+  #     uses: actions/upload-artifact@v4
+  #     with:
+  #       name: sbom
+  #       path: sbom.spdx.json
 
-  # ===== DEPLOYMENT - DEVELOPMENT =====
-  deploy-dev:
-    name: Deploy to Development
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.ref == 'refs/heads/develop'
-    environment: development
+  # # ===== DEPLOYMENT - DEVELOPMENT =====
+  # deploy-dev:
+  #   name: Deploy to Development
+  #   runs-on: ubuntu-latest
+  #   needs: build
+  #   if: github.ref == 'refs/heads/develop'
+  #   environment: development
 
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+  #   steps:
+  #   - name: Checkout code
+  #     uses: actions/checkout@v4
 
-    - name: Set up kubectl
-      uses: azure/setup-kubectl@v4
-      with:
-        version: 'latest'
+  #   - name: Set up kubectl
+  #     uses: azure/setup-kubectl@v4
+  #     with:
+  #       version: 'latest'
 
-    - name: Configure kubectl
-      run: |
-        echo "${{ secrets.KUBE_CONFIG_DEV }}" | base64 -d > kubeconfig
-        export KUBECONFIG=kubeconfig
+  #   - name: Configure kubectl
+  #     run: |
+  #       echo "${{ secrets.KUBE_CONFIG_DEV }}" | base64 -d > kubeconfig
+  #       export KUBECONFIG=kubeconfig
 
-    - name: Deploy to Development
-      run: |
-        export KUBECONFIG=kubeconfig
-        envsubst < k8s/development/deployment.yaml | kubectl apply -f -
-        kubectl rollout status deployment/prism-auth-service -n development
-      env:
-        IMAGE_TAG: ${{ github.sha }}
-        ENVIRONMENT: development
+  #   - name: Deploy to Development
+  #     run: |
+  #       export KUBECONFIG=kubeconfig
+  #       envsubst < k8s/development/deployment.yaml | kubectl apply -f -
+  #       kubectl rollout status deployment/prism-auth-service -n development
+  #     env:
+  #       IMAGE_TAG: ${{ github.sha }}
+  #       ENVIRONMENT: development
 
-  # ===== DEPLOYMENT - STAGING =====
-  deploy-staging:
-    name: Deploy to Staging
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.ref == 'refs/heads/main'
-    environment: staging
+  # # ===== DEPLOYMENT - STAGING =====
+  # deploy-staging:
+  #   name: Deploy to Staging
+  #   runs-on: ubuntu-latest
+  #   needs: build
+  #   if: github.ref == 'refs/heads/main'
+  #   environment: staging
 
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+  #   steps:
+  #   - name: Checkout code
+  #     uses: actions/checkout@v4
 
-    - name: Set up kubectl
-      uses: azure/setup-kubectl@v4
-      with:
-        version: 'latest'
+  #   - name: Set up kubectl
+  #     uses: azure/setup-kubectl@v4
+  #     with:
+  #       version: 'latest'
 
-    - name: Configure kubectl
-      run: |
-        echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > kubeconfig
-        export KUBECONFIG=kubeconfig
+  #   - name: Configure kubectl
+  #     run: |
+  #       echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > kubeconfig
+  #       export KUBECONFIG=kubeconfig
 
-    - name: Deploy to Staging
-      run: |
-        export KUBECONFIG=kubeconfig
-        envsubst < k8s/staging/deployment.yaml | kubectl apply -f -
-        kubectl rollout status deployment/prism-auth-service -n staging
-      env:
-        IMAGE_TAG: ${{ github.sha }}
-        ENVIRONMENT: staging
+  #   - name: Deploy to Staging
+  #     run: |
+  #       export KUBECONFIG=kubeconfig
+  #       envsubst < k8s/staging/deployment.yaml | kubectl apply -f -
+  #       kubectl rollout status deployment/prism-auth-service -n staging
+  #     env:
+  #       IMAGE_TAG: ${{ github.sha }}
+  #       ENVIRONMENT: staging
 
-    - name: Run smoke tests
-      run: |
-        # Wait for deployment to be ready
-        sleep 30
-        # Run basic health checks
-        kubectl exec -n staging deployment/prism-auth-service -- wget --spider http://localhost:8080/health
+  #   - name: Run smoke tests
+  #     run: |
+  #       # Wait for deployment to be ready
+  #       sleep 30
+  #       # Run basic health checks
+  #       kubectl exec -n staging deployment/prism-auth-service -- wget --spider http://localhost:8080/health
 
-  # ===== DEPLOYMENT - PRODUCTION =====
-  deploy-prod:
-    name: Deploy to Production
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.event_name == 'release'
-    environment: production
+  # # ===== DEPLOYMENT - PRODUCTION =====
+  # deploy-prod:
+  #   name: Deploy to Production
+  #   runs-on: ubuntu-latest
+  #   needs: build
+  #   if: github.event_name == 'release'
+  #   environment: production
 
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+  #   steps:
+  #   - name: Checkout code
+  #     uses: actions/checkout@v4
 
-    - name: Set up kubectl
-      uses: azure/setup-kubectl@v4
-      with:
-        version: 'latest'
+  #   - name: Set up kubectl
+  #     uses: azure/setup-kubectl@v4
+  #     with:
+  #       version: 'latest'
 
-    - name: Configure kubectl
-      run: |
-        echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > kubeconfig
-        export KUBECONFIG=kubeconfig
+  #   - name: Configure kubectl
+  #     run: |
+  #       echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > kubeconfig
+  #       export KUBECONFIG=kubeconfig
 
-    - name: Deploy to Production
-      run: |
-        export KUBECONFIG=kubeconfig
-        envsubst < k8s/production/deployment.yaml | kubectl apply -f -
-        kubectl rollout status deployment/prism-auth-service -n production
-      env:
-        IMAGE_TAG: ${{ github.event.release.tag_name }}
-        ENVIRONMENT: production
+  #   - name: Deploy to Production
+  #     run: |
+  #       export KUBECONFIG=kubeconfig
+  #       envsubst < k8s/production/deployment.yaml | kubectl apply -f -
+  #       kubectl rollout status deployment/prism-auth-service -n production
+  #     env:
+  #       IMAGE_TAG: ${{ github.event.release.tag_name }}
+  #       ENVIRONMENT: production
 
-    - name: Run production smoke tests
-      run: |
-        # Wait for deployment to be ready
-        sleep 60
-        # Run comprehensive health checks
-        kubectl exec -n production deployment/prism-auth-service -- wget --spider http://localhost:8080/health
-        kubectl exec -n production deployment/prism-auth-service -- wget --spider http://localhost:8080/ready
+  #   - name: Run production smoke tests
+  #     run: |
+  #       # Wait for deployment to be ready
+  #       sleep 60
+  #       # Run comprehensive health checks
+  #       kubectl exec -n production deployment/prism-auth-service -- wget --spider http://localhost:8080/health
+  #       kubectl exec -n production deployment/prism-auth-service -- wget --spider http://localhost:8080/ready
 
   # # ===== NOTIFICATION =====
   # notify:
