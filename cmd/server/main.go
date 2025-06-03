@@ -1,136 +1,243 @@
+// File: prism-auth-service/cmd/server/main.go
 package main
 
 import (
 	"context"
 	"fmt"
-	"log"
+	stdlog "log" // Menggunakan alias agar tidak bentrok dengan commonLogger jika ada
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/config"
+	"github.com/google/uuid"
+
+	// authConfigModule "github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/config" // Tidak lagi dibutuhkan jika commonConfig.Load() cukup
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/handlers"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/repository"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/services"
-	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/database"
-	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/logger"
-	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/middleware"
-	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/models"
+
+	commonConfig "github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/config"
+	commonDb "github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/database"
+	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/discovery"
+	commonLogger "github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/logger"
+	commonMiddleware "github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/middleware"
+	commonModels "github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/models"
+
 	"github.com/gin-gonic/gin"
 )
 
 func main() {
-	// Load configuration
-	cfg, err := config.Load()
+	// Langkah 1: Muat konfigurasi dari Vault (atau sumber lain yang dikelola commonConfig.Load)
+	// commonConfig.Load() diharapkan membaca VAULT_ADDR, VAULT_TOKEN, VAULT_CONFIG_PATH dari env.
+	cfg, err := commonConfig.Load()
 	if err != nil {
-		log.Fatal("Failed to load config:", err)
+		// Gunakan logger standar Go karena commonLogger mungkin belum terkonfigurasi
+		stdlog.Fatalf("FATAL: Failed to load application configuration: %v", err)
 	}
 
-	// Initialize database
-	db, err := database.NewPostgresConnection(&cfg.Database)
+	// (Opsional) Konfigurasi commonLogger berdasarkan nilai dari cfg
+	// Misalnya, jika cfg memiliki field Log.Level:
+	// if level, err := commonLogger.ParseLevel(cfg.Log.Level); err == nil {
+	//     commonLogger.SetLevel(level)
+	// }
+	commonLogger.Info("Application configuration loaded successfully.")
+
+	// Langkah 2: Inisialisasi Koneksi Database
+	db, err := commonDb.NewPostgresConnection(&cfg.Database) // cfg.Database diisi oleh commonConfig.Load()
 	if err != nil {
-		logger.Fatal("Failed to connect to database:", err)
+		commonLogger.Fatal("Failed to connect to database", "error", err)
+	}
+	commonLogger.Info("Database connection established.")
+
+	// Langkah 3: Inisialisasi Klien Consul untuk Service Discovery
+	// cfg.Consul.Address diisi oleh commonConfig.Load() dari Vault (key: "consul_address")
+	consulDiscoveryClient, err := discovery.NewConsulClient(cfg) // cfg adalah *commonConfig.Config
+	if err != nil {
+		commonLogger.Fatal("Failed to create Consul discovery client", "error", err)
+	}
+	commonLogger.Info("Consul discovery client initialized.", "consul_address", cfg.Consul.Address)
+
+	// Langkah 4: Persiapan Detail untuk Registrasi Service
+	// Asumsi cfg.ServiceName dan cfg.Server.Port diisi oleh commonConfig.Load() dari Vault
+	if cfg.ServiceName == "" {
+		commonLogger.Fatal("Service name is not configured (expected from Vault via commonConfig.Load).")
+	}
+	if cfg.Server.Port == 0 {
+		commonLogger.Fatal("Server port is not configured (expected from Vault via commonConfig.Load).")
 	}
 
-	// Initialize repositories
+	serviceID := fmt.Sprintf("%s-%s", cfg.ServiceName, uuid.New().String())
+
+	// serviceHostForRegistration adalah nama service ini di Docker Compose,
+	// yang dapat di-resolve di dalam network bersama (prism_global_network).
+	// Ini harus sesuai dengan nama service di prism-auth-service/docker-compose.yml
+	serviceHostForRegistration := "auth-service"
+
+	commonLogger.Info("Attempting to register service with Consul...",
+		"service_id", serviceID,
+		"service_name", cfg.ServiceName,
+		"register_as_host", serviceHostForRegistration,
+		"port", cfg.Server.Port,
+	)
+	err = consulDiscoveryClient.RegisterService(
+		serviceID,
+		cfg.ServiceName,
+		serviceHostForRegistration, // Alamat yang akan digunakan Consul untuk health check & ditemukan service lain
+		cfg.Server.Port,
+	)
+	if err != nil {
+		commonLogger.Fatal("Failed to register service with Consul", "error", err)
+	}
+	commonLogger.Info("Service registered with Consul successfully.")
+
+	// Langkah 5: Inisialisasi Repositories
 	userRepo := repository.NewUserRepository(db)
 	tenantRepo := repository.NewTenantRepository(db)
+
+	// Pastikan tenant default ada
 	tenant, err := tenantRepo.GetBySlug("default")
 	if err != nil {
-		logger.Fatal("Failed to check default tenant:", err)
+		commonLogger.Fatal("Failed to query for default tenant", "error", err)
 	}
 	if tenant == nil {
-		defaultTenant := &models.Tenant{
-			Name:   "Default Tenant",
+		commonLogger.Info("Default tenant not found, creating one...")
+		defaultTenant := &commonModels.Tenant{
+			Name:   "Default Tenant", // Bisa juga dari config jika perlu
 			Slug:   "default",
 			Status: "active",
 		}
 		if err := tenantRepo.Create(defaultTenant); err != nil {
-			logger.Fatal("Failed to create default tenant:", err)
+			commonLogger.Fatal("Failed to create default tenant", "error", err)
 		}
+		commonLogger.Info("Default tenant created.")
+	} else {
+		commonLogger.Info("Default tenant found.")
 	}
 
-	// Initialize services
-	jwtService := services.NewJWTService(cfg.JWT)
-	authService := services.NewAuthService(userRepo, jwtService)
-	userService := services.NewUserService(userRepo, tenantRepo)
+	// Langkah 6: Inisialisasi Application Services
+	jwtService := services.NewJWTService(cfg.JWT) // cfg.JWT diisi oleh commonConfig.Load()
+	authAppService := services.NewAuthService(userRepo, jwtService)
+	userAppService := services.NewUserService(userRepo, tenantRepo)
+	commonLogger.Info("Application services initialized.")
 
-	// Initialize handlers
-	authHandler := handlers.NewAuthHandler(authService)
-	userHandler := handlers.NewUserHandler(userService)
-	healthHandler := handlers.NewHealthHandler()
+	// Langkah 7: Inisialisasi HTTP Handlers
+	authHandler := handlers.NewAuthHandler(authAppService)
+	userHandler := handlers.NewUserHandler(userAppService)
+	healthHandler := handlers.NewHealthHandler() // Jika butuh DB: handlers.NewHealthHandler(db)
+	commonLogger.Info("HTTP handlers initialized.")
 
-	// Setup router
+	// Langkah 8: Setup Router
 	router := setupRouter(cfg, authHandler, userHandler, healthHandler)
+	commonLogger.Info("HTTP router configured.")
 
-	// Create server
+	// Langkah 9: Konfigurasi dan Jalankan HTTP Server
+	serverAddr := fmt.Sprintf(":%d", cfg.Server.Port)
+	commonLogger.Info("Starting HTTP server...", "address", serverAddr, "read_timeout", cfg.Server.ReadTimeout, "write_timeout", cfg.Server.WriteTimeout)
+
 	srv := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
+		Addr:         serverAddr,
 		Handler:      router,
 		ReadTimeout:  time.Duration(cfg.Server.ReadTimeout) * time.Second,
 		WriteTimeout: time.Duration(cfg.Server.WriteTimeout) * time.Second,
 	}
 
-	// Start server in goroutine
 	go func() {
-		logger.Info("Starting server on port ", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatal("Failed to start server:", err)
+			commonLogger.Fatal("HTTP server ListenAndServe error", "error", err)
 		}
 	}()
 
-	// Wait for interrupt signal to gracefully shutdown
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-	logger.Info("Shutting down server...")
+	// Langkah 10: Implementasi Graceful Shutdown
+	quitChannel := make(chan os.Signal, 1)
+	signal.Notify(quitChannel, syscall.SIGINT, syscall.SIGTERM)
+	receivedSignal := <-quitChannel
+	commonLogger.Info("Received shutdown signal", "signal", receivedSignal.String())
 
-	// Graceful shutdown with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	if err := srv.Shutdown(ctx); err != nil {
-		logger.Fatal("Server forced to shutdown:", err)
+	// Deregister dari Consul
+	commonLogger.Info("Attempting to deregister service from Consul...", "service_id", serviceID)
+	if err := consulDiscoveryClient.DeregisterService(serviceID); err != nil {
+		commonLogger.Error("Failed to deregister service from Consul", "service_id", serviceID, "error", err)
+	} else {
+		commonLogger.Info("Service deregistered from Consul successfully.")
 	}
 
-	logger.Info("Server exited")
+	// Shutdown HTTP server
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 30*time.Second) // Timeout bisa dari cfg
+	defer cancelShutdown()
+
+	commonLogger.Info("Attempting graceful shutdown of HTTP server...")
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		commonLogger.Fatal("HTTP server graceful shutdown failed", "error", err)
+	}
+
+	commonLogger.Info("HTTP server shutdown complete. Application exiting.")
 }
 
-func setupRouter(cfg *config.Config, authHandler *handlers.AuthHandler, userHandler *handlers.UserHandler, healthHandler *handlers.HealthHandler) *gin.Engine {
+// setupRouter sekarang menerima *commonConfig.Config
+func setupRouter(
+	cfg *commonConfig.Config,
+	authHandler *handlers.AuthHandler,
+	userHandler *handlers.UserHandler,
+	healthHandler *handlers.HealthHandler,
+) *gin.Engine {
+
+	// Ambil gin_mode dari konfigurasi yang dimuat (misal dari Vault)
+	// Asumsi ada helper atau cara untuk mendapatkan "gin_mode" dari cfg.
+	// Jika tidak, Anda bisa hardcode atau ambil dari env var lain yang tidak dari Vault.
+	// Untuk contoh ini, kita asumsikan cfg bisa menyediakan string "gin_mode".
+	// Jika cfg tidak memiliki metode GetStringFromMap, dan sudah menjadi struct:
+	// Anda perlu memastikan 'gin_mode' adalah field di struct cfg atau sub-structnya.
+	// Misal: cfg.Server.GinMode
+	// Untuk kesederhanaan, kita pakai env var biasa untuk GIN_MODE saat ini.
+	ginMode := os.Getenv("GIN_MODE")
+	if ginMode == "" {
+		ginMode = gin.DebugMode // Default
+	}
+	if ginMode == gin.ReleaseMode {
+		gin.SetMode(gin.ReleaseMode)
+	} else {
+		gin.SetMode(gin.DebugMode)
+	}
+	commonLogger.Info("GIN mode set.", "mode", gin.Mode())
+
 	router := gin.New()
 
-	// Global middleware
-	router.Use(gin.Logger())
-	router.Use(gin.Recovery())
-	router.Use(middleware.CORS())
-	router.Use(middleware.RequestID())
-	router.Use(middleware.TenantMiddleware())
+	// Gunakan logger dan recovery kustom dari common-libs jika tersedia dan diinginkan
+	// Sesuaikan dengan implementasi di commonLogger Anda
+	if commonLogger.Log != nil { // Periksa apakah logger sudah diinisialisasi
+		router.Use(commonLogger.GinLogger(commonLogger.Log), commonLogger.GinRecovery(commonLogger.Log, true))
+	} else { // Fallback ke logger Gin standar
+		router.Use(gin.Logger(), gin.Recovery())
+	}
 
-	// Health check
+	router.Use(commonMiddleware.CORS())
+	router.Use(commonMiddleware.RequestID())
+	router.Use(commonMiddleware.TenantMiddleware())
+
+	// Health check endpoints
 	router.GET("/health", healthHandler.HealthCheck)
-	router.GET("/ready", healthHandler.ReadinessCheck)
+	router.GET("/ready", healthHandler.ReadinessCheck) // Pastikan ReadinessCheck diimplementasikan
 
-	// API routes
+	// API v1 routes
 	v1 := router.Group("/api/v1")
 	{
-		// Public routes
-		auth := v1.Group("/auth")
+		authGroup := v1.Group("/auth")
 		{
-			auth.POST("/login", authHandler.Login)
-			auth.POST("/register", authHandler.Register)
-			auth.POST("/refresh", authHandler.RefreshToken)
-			auth.POST("/logout", authHandler.Logout)
-			auth.POST("/forgot-password", authHandler.ForgotPassword)
-			auth.POST("/reset-password", authHandler.ResetPassword)
+			authGroup.POST("/login", authHandler.Login)
+			authGroup.POST("/register", authHandler.Register)
+			authGroup.POST("/refresh", authHandler.RefreshToken)
+			authGroup.POST("/logout", authHandler.Logout)
+			authGroup.POST("/forgot-password", authHandler.ForgotPassword)
+			authGroup.POST("/reset-password", authHandler.ResetPassword)
 		}
 
 		// Protected routes
+		// cfg.JWT adalah *commonConfig.JWTConfig yang diisi oleh commonConfig.Load()
 		protected := v1.Group("/")
-		protected.Use(middleware.RequireAuth(cfg.JWT))
+		protected.Use(commonMiddleware.RequireAuth(cfg.JWT))
 		{
-			// User management
 			users := protected.Group("/users")
 			{
 				users.GET("/", userHandler.GetUsers)
@@ -141,8 +248,6 @@ func setupRouter(cfg *config.Config, authHandler *handlers.AuthHandler, userHand
 				users.PUT("/profile", userHandler.UpdateProfile)
 				users.POST("/change-password", userHandler.ChangePassword)
 			}
-
-			// Role management
 			roles := protected.Group("/roles")
 			{
 				roles.GET("/", userHandler.GetRoles)
@@ -152,6 +257,5 @@ func setupRouter(cfg *config.Config, authHandler *handlers.AuthHandler, userHand
 			}
 		}
 	}
-
 	return router
 }

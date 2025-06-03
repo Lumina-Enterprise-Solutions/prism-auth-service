@@ -1,69 +1,89 @@
 services:
-  postgres:
+  # Database untuk prism-auth-service
+  prism-auth-db: # Nama service untuk DB
     image: postgres:latest
-    container_name: prism-auth-postgres
+    container_name: prism-auth-db-ctn
     environment:
-      POSTGRES_DB: prism_erp
-      POSTGRES_USER: prism
-      POSTGRES_PASSWORD: prism123
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: ${DB_NAME:-prism_erp} # Menggunakan variabel atau default
+      POSTGRES_USER: ${DB_USER:-prism}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-prism123}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./migrations:/docker-entrypoint-initdb.d
-    networks:
-      - prism-network
+      - prism_auth_db_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d # Migrations Anda
+    ports: # Opsional: ekspos ke host jika perlu akses langsung dari luar Docker
+      - "5432:5432" # Gunakan port host yang berbeda jika 5432 sudah dipakai
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U prism_user -d prism_auth"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-prism} -d ${DB_NAME:-prism_erp}"]
       interval: 10s
       timeout: 5s
       retries: 5
-
-  redis:
-    image: redis:latest
-    container_name: prism-auth-redis
-    ports:
-      - "6379:6379"
     networks:
-      - prism-network
+      - prism_auth_internal_network # Network internal untuk stack ini
+      # Tidak perlu prism_shared_network di sini, auth-service yang akan menghubunginya
+
+  # Redis untuk prism-auth-service
+  prism-auth-redis: # Nama service untuk Redis
+    image: redis:latest
+    container_name: prism-auth-redis-ctn
+    ports: # Opsional
+      - "6380:6379" # Port host berbeda
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
+    networks:
+      - prism_auth_internal_network
 
+  # Layanan aplikasi prism-auth-service
   auth-service:
     build:
       context: .
-      dockerfile: docker/Dockerfile
-    container_name: prism-auth-service
+      dockerfile: docker/Dockerfile # Asumsi Dockerfile ada di ./docker/Dockerfile
+    container_name: prism-auth-service-ctn
     ports:
-      - "8080:8080"
+      - "${SERVER_PORT_HOST:-8080}:${SERVER_PORT_CONTAINER:-8080}" # Port aplikasi
     environment:
-      - DB_HOST=prism-auth-postgres
-      - DB_PORT=5432
-      - DB_USER=prism
-      - DB_PASSWORD=prism123
-      - DB_NAME=prism_erp
-      - DB_SSL_MODE=disable
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - JWT_SECRET=your-super-secret-jwt-key-change-in-production
-      - JWT_EXPIRATION_TIME=3600
-      - SERVER_PORT=8080
-      - GIN_MODE=debug
+      # Bootstrap variables untuk Vault (WAJIB ADA)
+      - VAULT_ADDR=http://vault-server-1:8200 # Menunjuk ke NAMA SERVICE Vault dari infra
+      - VAULT_TOKEN=roottoken # HANYA UNTUK DEV!
+      - VAULT_CONFIG_PATH=config/prism-auth-service # Path config di Vault
+
+      # Bootstrap variable untuk Consul Service Discovery (WAJIB ADA)
+      # Aplikasi akan menggunakan ini untuk mendaftarkan dirinya ke Consul
+      # yang berjalan di network 'prism_global_network'
+      - CONSUL_ADDRESS_FOR_DISCOVERY=http://consul-server-1:8500 # Menunjuk ke NAMA SERVICE Consul dari infra
+
+      # Variabel lain yang mungkin tidak dari Vault (jarang, tapi bisa ada)
+      # - ENVIRONMENT=development
+      # - GIN_MODE=debug
+
+      # Variabel yang akan digunakan oleh aplikasi SETELAH config dimuat dari Vault
+      # Ini hanya untuk referensi, nilainya akan di-override oleh Vault.
+      # Anda TIDAK PERLU menyetelnya di sini jika semua sudah di Vault,
+      # kecuali mungkin untuk default saat dev tanpa Vault.
+      # - DB_HOST=${DB_HOST_APP:-prism-auth-db} # Aplikasi akan menggunakan ini untuk konek ke DB di atas
+      # - DB_PORT=${DB_PORT_APP:-5432}
+      # - SERVICE_NAME=prism-auth-service # Ini akan dimuat dari Vault
     depends_on:
-      postgres:
+      prism-auth-db:
         condition: service_healthy
-      redis:
+      prism-auth-redis:
         condition: service_healthy
+      # Tidak perlu depends_on consul-server-1 atau vault-server-1 di sini
+      # karena mereka ada di compose file terpisah.
+      # Aplikasi harus bisa menangani jika Vault/Consul belum siap (retry logic di config loader).
     networks:
-      - prism-network
-    restart: unless-stopped
+      - prism_auth_internal_network # Terhubung ke DB & Redis lokal
+      - prism_shared_network        # Terhubung ke Consul & Vault global
 
 volumes:
-  postgres_data:
+  prism_auth_db_data:
 
 networks:
-  prism-network:
+  prism_auth_internal_network: # Network private untuk service dan DB/Redis-nya
+    name: prism_auth_stack_network
     driver: bridge
+  prism_shared_network: # Network global yang dibuat oleh docker-compose-infra.yml
+    name: prism_global_network # HARUS SAMA PERSIS dengan nama di infra/docker-compose-infra.yml
+    external: true # Menandakan network ini sudah ada (dibuat oleh compose lain)
