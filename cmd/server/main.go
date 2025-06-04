@@ -221,7 +221,7 @@ func setupRouter(
 				// User-Role specific endpoints
 				usersGroup.POST("/assign-role", userHandler.AssignRoleToUser)   // Membutuhkan: "users:manage_roles" atau "roles:assign"
 				usersGroup.POST("/revoke-role", userHandler.RevokeRoleFromUser) // Membutuhkan: "users:manage_roles" atau "roles:revoke"
-				usersGroup.GET("/:user_id/roles", userHandler.GetUserRoles)     // Membutuhkan: "users:read_roles"
+				usersGroup.GET("/:id/roles", userHandler.GetUserRoles)          // Membutuhkan: "users:read_roles"
 			}
 
 			// Endpoint untuk manajemen roles itu sendiri

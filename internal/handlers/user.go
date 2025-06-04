@@ -315,7 +315,8 @@ func (h *UserHandler) RevokeRoleFromUser(c *gin.Context) {
 
 func (h *UserHandler) GetUserRoles(c *gin.Context) {
 	tenantID := h.getTenantID(c)
-	userID, err := uuid.Parse(c.Param("user_id")) // Sesuaikan dengan nama param di router
+	// [MODIFIKASI] Ambil parameter "id" bukan "user_id"
+	userID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusBadRequest, "Invalid user ID format", err)
 		return
