@@ -17,7 +17,8 @@ import (
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/repository"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/services"
 
-	commonCache "github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/cache" // <-- [TAMBAHKAN]
+	serviceMiddleware "github.com/Lumina-Enterprise-Solutions/prism-auth-service/pkg/middleware" // Alias jika diperlukan
+	commonCache "github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/cache"             // <-- [TAMBAHKAN]
 	commonConfig "github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/config"
 	commonDb "github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/database"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/discovery"
@@ -86,7 +87,7 @@ func main() {
 
 	userRepo := repository.NewUserRepository(db)
 	tenantRepo := repository.NewTenantRepository(db)
-	roleRepo := repository.NewRoleRepository(db) // <-- [TAMBAHKAN]
+	roleRepo := repository.NewRoleRepository(db) // roleRepo sudah ada
 
 	tenant, err := tenantRepo.GetBySlug("default")
 	if err != nil {
@@ -120,7 +121,8 @@ func main() {
 	healthHandler := handlers.NewHealthHandler()
 	commonLogger.Info("HTTP handlers initialized.")
 
-	router := setupRouter(cfg, authHandler, userHandler, healthHandler)
+	// [MODIFIKASI] Teruskan roleRepo (sebagai RBACPermissionChecker) ke setupRouter
+	router := setupRouter(cfg, authHandler, userHandler, healthHandler, roleRepo)
 	commonLogger.Info("HTTP router configured.")
 
 	serverAddr := fmt.Sprintf(":%d", cfg.Server.Port)
@@ -162,11 +164,13 @@ func main() {
 	commonLogger.Info("HTTP server shutdown complete. Application exiting.")
 }
 
+// [MODIFIKASI] setupRouter sekarang menerima roleRepo sebagai RBACPermissionChecker
 func setupRouter(
 	cfg *commonConfig.Config,
 	authHandler *handlers.AuthHandler,
-	userHandler *handlers.UserHandler, // UserHandler sekarang menangani endpoint roles juga
+	userHandler *handlers.UserHandler,
 	healthHandler *handlers.HealthHandler,
+	permissionChecker serviceMiddleware.RBACPermissionChecker, // <-- [MODIFIKASI]
 ) *gin.Engine {
 	ginMode := os.Getenv("GIN_MODE")
 	if ginMode == "" {
@@ -207,31 +211,35 @@ func setupRouter(
 		{
 			usersGroup := protected.Group("/users")
 			{
-				usersGroup.GET("/", userHandler.GetUsers)         // Membutuhkan: "users:read"
-				usersGroup.GET("/:id", userHandler.GetUser)       // Membutuhkan: "users:read"
-				usersGroup.PUT("/:id", userHandler.UpdateUser)    // Membutuhkan: "users:update"
-				usersGroup.DELETE("/:id", userHandler.DeleteUser) // Membutuhkan: "users:delete"
-				// Endpoint Create User mungkin lebih cocok di luar user specific /:id
-				// usersGroup.POST("/", userHandler.CreateUser) // Ini mungkin perlu di admin/users, bukan /users
+				// Parameter ketiga untuk RequirePermission adalah permission string "resource:action"
+				// usersGroup.POST("/", serviceMiddleware.RequirePermission(permissionChecker, "users:create"), userHandler.CreateUser)
+				usersGroup.GET("/", serviceMiddleware.RequirePermission(permissionChecker, "users:read"), userHandler.GetUsers)
+				usersGroup.GET("/:id", serviceMiddleware.RequirePermission(permissionChecker, "users:read"), userHandler.GetUser)
+				usersGroup.PUT("/:id", serviceMiddleware.RequirePermission(permissionChecker, "users:update"), userHandler.UpdateUser)
+				usersGroup.DELETE("/:id", serviceMiddleware.RequirePermission(permissionChecker, "users:delete"), userHandler.DeleteUser)
 
-				usersGroup.GET("/profile", userHandler.GetProfile)              // User bisa lihat profil sendiri
-				usersGroup.PUT("/profile", userHandler.UpdateProfile)           // User bisa update profil sendiri
-				usersGroup.POST("/change-password", userHandler.ChangePassword) // User bisa ganti password sendiri
+				usersGroup.GET("/:id/roles", serviceMiddleware.RequirePermission(permissionChecker, "users:read_roles"), userHandler.GetUserRoles)
 
-				// User-Role specific endpoints
-				usersGroup.POST("/assign-role", userHandler.AssignRoleToUser)   // Membutuhkan: "users:manage_roles" atau "roles:assign"
-				usersGroup.POST("/revoke-role", userHandler.RevokeRoleFromUser) // Membutuhkan: "users:manage_roles" atau "roles:revoke"
-				usersGroup.GET("/:id/roles", userHandler.GetUserRoles)          // Membutuhkan: "users:read_roles"
+				// Profile & Change Password biasanya tidak memerlukan permission RBAC spesifik selain login
+				usersGroup.GET("/profile", userHandler.GetProfile)
+				usersGroup.PUT("/profile", userHandler.UpdateProfile)
+				usersGroup.POST("/change-password", userHandler.ChangePassword)
+
+				// Assign/Revoke roles
+				usersGroup.POST("/assign-role", serviceMiddleware.RequirePermission(permissionChecker, "users:manage_roles"), userHandler.AssignRoleToUser)
+				usersGroup.POST("/revoke-role", serviceMiddleware.RequirePermission(permissionChecker, "users:manage_roles"), userHandler.RevokeRoleFromUser)
 			}
 
-			// Endpoint untuk manajemen roles itu sendiri
 			rolesGroup := protected.Group("/roles")
+			// Anda bisa menerapkan middleware RequirePermission ke seluruh group jika semua endpoint di dalamnya butuh permission yang sama,
+			// atau jika Anda punya cara untuk menentukan permission dinamis berdasarkan method + path.
+			// Untuk sekarang, kita terapkan per endpoint untuk kejelasan.
 			{
-				rolesGroup.GET("/", userHandler.GetRoles)              // Membutuhkan: "roles:read"
-				rolesGroup.POST("/", userHandler.CreateRole)           // Membutuhkan: "roles:create"
-				rolesGroup.GET("/:role_id", userHandler.GetRoleByID)   // Membutuhkan: "roles:read"
-				rolesGroup.PUT("/:role_id", userHandler.UpdateRole)    // Membutuhkan: "roles:update"
-				rolesGroup.DELETE("/:role_id", userHandler.DeleteRole) // Membutuhkan: "roles:delete"
+				rolesGroup.GET("/", serviceMiddleware.RequirePermission(permissionChecker, "roles:read"), userHandler.GetRoles)
+				rolesGroup.POST("/", serviceMiddleware.RequirePermission(permissionChecker, "roles:create"), userHandler.CreateRole)
+				rolesGroup.GET("/:role_id", serviceMiddleware.RequirePermission(permissionChecker, "roles:read"), userHandler.GetRoleByID)
+				rolesGroup.PUT("/:role_id", serviceMiddleware.RequirePermission(permissionChecker, "roles:update"), userHandler.UpdateRole)
+				rolesGroup.DELETE("/:role_id", serviceMiddleware.RequirePermission(permissionChecker, "roles:delete"), userHandler.DeleteRole)
 			}
 		}
 	}

@@ -1,10 +1,10 @@
-// File: prism-auth-service/internal/repository/role.go
 package repository
 
 import (
 	"errors"
 
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/database"
+	commonLogger "github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/logger" // <-- [TAMBAHKAN]
 	commonModels "github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/models"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -124,4 +124,59 @@ func (r *RoleRepository) GetUserRoles(userID uuid.UUID, tenantID string) ([]comm
 		return nil, err
 	}
 	return user.Roles, nil
+}
+
+// GetUserPermissions mengambil dan menggabungkan semua permission untuk daftar nama role tertentu dalam satu tenant.
+// Ini adalah implementasi untuk interface RBACPermissionChecker.
+func (r *RoleRepository) GetUserPermissions(tenantID string, roleNames []string) (commonModels.PermissionMap, error) {
+	if len(roleNames) == 0 {
+		return make(commonModels.PermissionMap), nil // Tidak ada role, tidak ada permission
+	}
+
+	db := r.db.WithTenant(tenantID)
+	var roles []commonModels.Role
+
+	// Ambil semua objek Role berdasarkan nama-nama role
+	// PERHATIAN: `WHERE name IN (?)` dengan GORM bisa tricky jika roleNames kosong. Sudah ditangani di atas.
+	if err := db.Where("name IN ?", roleNames).Find(&roles).Error; err != nil {
+		commonLogger.Errorf("RBAC/Repo: Error fetching roles by names for tenant %s: %v. Roles: %v", tenantID, err, roleNames)
+		return nil, err
+	}
+
+	if len(roles) == 0 {
+		commonLogger.Warnf("RBAC/Repo: No roles found for names %v in tenant %s", roleNames, tenantID)
+		// Ini bisa berarti role yang ada di JWT tidak (lagi) ada di DB.
+		// Bisa dianggap sebagai tidak ada permission.
+		return make(commonModels.PermissionMap), nil
+	}
+
+	// Gabungkan semua permissions dari role-role tersebut
+	// Key: Resource, Value: map[string]bool untuk action (untuk de-duplikasi action)
+	mergedPermissions := make(commonModels.PermissionMap)
+
+	for _, role := range roles {
+		if role.Permissions == nil {
+			continue
+		}
+		for resource, actions := range role.Permissions {
+			if _, ok := mergedPermissions[resource]; !ok {
+				mergedPermissions[resource] = []string{}
+			}
+
+			// Untuk menghindari duplikasi action pada resource yang sama dari role berbeda
+			existingActionsMap := make(map[string]bool)
+			for _, existingAction := range mergedPermissions[resource] {
+				existingActionsMap[existingAction] = true
+			}
+
+			for _, newAction := range actions {
+				if !existingActionsMap[newAction] {
+					mergedPermissions[resource] = append(mergedPermissions[resource], newAction)
+					existingActionsMap[newAction] = true
+				}
+			}
+		}
+	}
+	commonLogger.Debugf("RBAC/Repo: Merged permissions for tenant %s, roles %v: %v", tenantID, roleNames, mergedPermissions)
+	return mergedPermissions, nil
 }
