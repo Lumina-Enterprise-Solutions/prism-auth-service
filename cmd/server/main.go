@@ -13,11 +13,11 @@ import (
 
 	"github.com/google/uuid"
 
-	// authConfigModule "github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/config" // Tidak lagi dibutuhkan jika commonConfig.Load() cukup
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/handlers"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/repository"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/services"
 
+	commonCache "github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/cache" // <-- [TAMBAHKAN]
 	commonConfig "github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/config"
 	commonDb "github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/database"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/discovery"
@@ -29,38 +29,35 @@ import (
 )
 
 func main() {
-	// Langkah 1: Muat konfigurasi dari Vault (atau sumber lain yang dikelola commonConfig.Load)
-	// commonConfig.Load() diharapkan membaca VAULT_ADDR, VAULT_TOKEN, VAULT_CONFIG_PATH dari env.
 	cfg, err := commonConfig.Load()
 	if err != nil {
-		// Gunakan logger standar Go karena commonLogger mungkin belum terkonfigurasi
 		stdlog.Fatalf("FATAL: Failed to load application configuration: %v", err)
 	}
-
-	// (Opsional) Konfigurasi commonLogger berdasarkan nilai dari cfg
-	// Misalnya, jika cfg memiliki field Log.Level:
-	// if level, err := commonLogger.ParseLevel(cfg.Log.Level); err == nil {
-	//     commonLogger.SetLevel(level)
-	// }
 	commonLogger.Info("Application configuration loaded successfully.")
 
-	// Langkah 2: Inisialisasi Koneksi Database
-	db, err := commonDb.NewPostgresConnection(&cfg.Database) // cfg.Database diisi oleh commonConfig.Load()
+	db, err := commonDb.NewPostgresConnection(&cfg.Database)
 	if err != nil {
 		commonLogger.Fatal("Failed to connect to database", "error", err)
 	}
 	commonLogger.Info("Database connection established.")
 
-	// Langkah 3: Inisialisasi Klien Consul untuk Service Discovery
-	// cfg.Consul.Address diisi oleh commonConfig.Load() dari Vault (key: "consul_address")
-	consulDiscoveryClient, err := discovery.NewConsulClient(cfg) // cfg adalah *commonConfig.Config
+	// [TAMBAHKAN] Inisialisasi Redis Client
+	redisClient := commonCache.NewRedisClient(cfg.Redis) // cfg.Redis diisi oleh commonConfig.Load()
+	// Ping untuk memastikan koneksi (opsional tapi bagus untuk startup check)
+	if _, err := redisClient.Exists(context.Background(), "startup_ping"); err != nil { // Menggunakan Exists sebagai ping sederhana
+		commonLogger.Warn("Could not connect to Redis or Redis is not ready", "error", err)
+		// Anda mungkin ingin menggagalkan startup jika Redis krusial:
+		// commonLogger.Fatal("Failed to connect to Redis", "error", err)
+	} else {
+		commonLogger.Info("Redis connection established.")
+	}
+
+	consulDiscoveryClient, err := discovery.NewConsulClient(cfg)
 	if err != nil {
 		commonLogger.Fatal("Failed to create Consul discovery client", "error", err)
 	}
 	commonLogger.Info("Consul discovery client initialized.", "consul_address", cfg.Consul.Address)
 
-	// Langkah 4: Persiapan Detail untuk Registrasi Service
-	// Asumsi cfg.ServiceName dan cfg.Server.Port diisi oleh commonConfig.Load() dari Vault
 	if cfg.ServiceName == "" {
 		commonLogger.Fatal("Service name is not configured (expected from Vault via commonConfig.Load).")
 	}
@@ -69,12 +66,7 @@ func main() {
 	}
 
 	serviceID := fmt.Sprintf("%s-%s", cfg.ServiceName, uuid.New().String())
-
-	// serviceHostForRegistration adalah nama service ini di Docker Compose,
-	// yang dapat di-resolve di dalam network bersama (prism_global_network).
-	// Ini harus sesuai dengan nama service di prism-auth-service/docker-compose.yml
 	serviceHostForRegistration := "auth-service"
-
 	commonLogger.Info("Attempting to register service with Consul...",
 		"service_id", serviceID,
 		"service_name", cfg.ServiceName,
@@ -84,7 +76,7 @@ func main() {
 	err = consulDiscoveryClient.RegisterService(
 		serviceID,
 		cfg.ServiceName,
-		serviceHostForRegistration, // Alamat yang akan digunakan Consul untuk health check & ditemukan service lain
+		serviceHostForRegistration,
 		cfg.Server.Port,
 	)
 	if err != nil {
@@ -92,11 +84,9 @@ func main() {
 	}
 	commonLogger.Info("Service registered with Consul successfully.")
 
-	// Langkah 5: Inisialisasi Repositories
 	userRepo := repository.NewUserRepository(db)
 	tenantRepo := repository.NewTenantRepository(db)
 
-	// Pastikan tenant default ada
 	tenant, err := tenantRepo.GetBySlug("default")
 	if err != nil {
 		commonLogger.Fatal("Failed to query for default tenant", "error", err)
@@ -104,7 +94,7 @@ func main() {
 	if tenant == nil {
 		commonLogger.Info("Default tenant not found, creating one...")
 		defaultTenant := &commonModels.Tenant{
-			Name:   "Default Tenant", // Bisa juga dari config jika perlu
+			Name:   "Default Tenant",
 			Slug:   "default",
 			Status: "active",
 		}
@@ -116,23 +106,21 @@ func main() {
 		commonLogger.Info("Default tenant found.")
 	}
 
-	// Langkah 6: Inisialisasi Application Services
-	jwtService := services.NewJWTService(cfg.JWT) // cfg.JWT diisi oleh commonConfig.Load()
-	authAppService := services.NewAuthService(userRepo, jwtService)
+	// [MODIFIKASI] Teruskan redisClient ke JWTService
+	jwtService := services.NewJWTService(cfg.JWT, redisClient)
+	// [MODIFIKASI] Teruskan redisClient ke AuthService jika AuthService perlu revoke token langsung
+	authAppService := services.NewAuthService(userRepo, jwtService, redisClient)
 	userAppService := services.NewUserService(userRepo, tenantRepo)
 	commonLogger.Info("Application services initialized.")
 
-	// Langkah 7: Inisialisasi HTTP Handlers
 	authHandler := handlers.NewAuthHandler(authAppService)
-	userHandler := handlers.NewUserHandler(userAppService)
-	healthHandler := handlers.NewHealthHandler() // Jika butuh DB: handlers.NewHealthHandler(db)
+	userHandler := handlers.NewUserHandler(userAppService, authAppService) // Teruskan authService ke userHandler jika diperlukan untuk ChangePassword
+	healthHandler := handlers.NewHealthHandler()
 	commonLogger.Info("HTTP handlers initialized.")
 
-	// Langkah 8: Setup Router
 	router := setupRouter(cfg, authHandler, userHandler, healthHandler)
 	commonLogger.Info("HTTP router configured.")
 
-	// Langkah 9: Konfigurasi dan Jalankan HTTP Server
 	serverAddr := fmt.Sprintf(":%d", cfg.Server.Port)
 	commonLogger.Info("Starting HTTP server...", "address", serverAddr, "read_timeout", cfg.Server.ReadTimeout, "write_timeout", cfg.Server.WriteTimeout)
 
@@ -149,13 +137,11 @@ func main() {
 		}
 	}()
 
-	// Langkah 10: Implementasi Graceful Shutdown
 	quitChannel := make(chan os.Signal, 1)
 	signal.Notify(quitChannel, syscall.SIGINT, syscall.SIGTERM)
 	receivedSignal := <-quitChannel
 	commonLogger.Info("Received shutdown signal", "signal", receivedSignal.String())
 
-	// Deregister dari Consul
 	commonLogger.Info("Attempting to deregister service from Consul...", "service_id", serviceID)
 	if err := consulDiscoveryClient.DeregisterService(serviceID); err != nil {
 		commonLogger.Error("Failed to deregister service from Consul", "service_id", serviceID, "error", err)
@@ -163,8 +149,7 @@ func main() {
 		commonLogger.Info("Service deregistered from Consul successfully.")
 	}
 
-	// Shutdown HTTP server
-	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 30*time.Second) // Timeout bisa dari cfg
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelShutdown()
 
 	commonLogger.Info("Attempting graceful shutdown of HTTP server...")
@@ -175,22 +160,12 @@ func main() {
 	commonLogger.Info("HTTP server shutdown complete. Application exiting.")
 }
 
-// setupRouter sekarang menerima *commonConfig.Config
 func setupRouter(
 	cfg *commonConfig.Config,
 	authHandler *handlers.AuthHandler,
 	userHandler *handlers.UserHandler,
 	healthHandler *handlers.HealthHandler,
 ) *gin.Engine {
-
-	// Ambil gin_mode dari konfigurasi yang dimuat (misal dari Vault)
-	// Asumsi ada helper atau cara untuk mendapatkan "gin_mode" dari cfg.
-	// Jika tidak, Anda bisa hardcode atau ambil dari env var lain yang tidak dari Vault.
-	// Untuk contoh ini, kita asumsikan cfg bisa menyediakan string "gin_mode".
-	// Jika cfg tidak memiliki metode GetStringFromMap, dan sudah menjadi struct:
-	// Anda perlu memastikan 'gin_mode' adalah field di struct cfg atau sub-structnya.
-	// Misal: cfg.Server.GinMode
-	// Untuk kesederhanaan, kita pakai env var biasa untuk GIN_MODE saat ini.
 	ginMode := os.Getenv("GIN_MODE")
 	if ginMode == "" {
 		ginMode = gin.DebugMode // Default
@@ -201,26 +176,17 @@ func setupRouter(
 		gin.SetMode(gin.DebugMode)
 	}
 	commonLogger.Info("GIN mode set.", "mode", gin.Mode())
-
 	router := gin.New()
-
-	// Gunakan logger dan recovery kustom dari common-libs jika tersedia dan diinginkan
-	// Sesuaikan dengan implementasi di commonLogger Anda
-	if commonLogger.Log != nil { // Periksa apakah logger sudah diinisialisasi
+	if commonLogger.Log != nil {
 		router.Use(commonLogger.GinLogger(commonLogger.Log), commonLogger.GinRecovery(commonLogger.Log, true))
-	} else { // Fallback ke logger Gin standar
+	} else {
 		router.Use(gin.Logger(), gin.Recovery())
 	}
-
 	router.Use(commonMiddleware.CORS())
 	router.Use(commonMiddleware.RequestID())
 	router.Use(commonMiddleware.TenantMiddleware())
-
-	// Health check endpoints
 	router.GET("/health", healthHandler.HealthCheck)
-	router.GET("/ready", healthHandler.ReadinessCheck) // Pastikan ReadinessCheck diimplementasikan
-
-	// API v1 routes
+	router.GET("/ready", healthHandler.ReadinessCheck)
 	v1 := router.Group("/api/v1")
 	{
 		authGroup := v1.Group("/auth")
@@ -228,13 +194,11 @@ func setupRouter(
 			authGroup.POST("/login", authHandler.Login)
 			authGroup.POST("/register", authHandler.Register)
 			authGroup.POST("/refresh", authHandler.RefreshToken)
-			authGroup.POST("/logout", authHandler.Logout)
+			// [TAMBAHKAN] Logout endpoint baru
+			authGroup.POST("/logout", commonMiddleware.RequireAuth(cfg.JWT), authHandler.Logout) // Logout perlu diautentikasi untuk tahu token mana yang direvoke
 			authGroup.POST("/forgot-password", authHandler.ForgotPassword)
 			authGroup.POST("/reset-password", authHandler.ResetPassword)
 		}
-
-		// Protected routes
-		// cfg.JWT adalah *commonConfig.JWTConfig yang diisi oleh commonConfig.Load()
 		protected := v1.Group("/")
 		protected.Use(commonMiddleware.RequireAuth(cfg.JWT))
 		{

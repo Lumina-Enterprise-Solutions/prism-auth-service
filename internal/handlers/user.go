@@ -1,3 +1,4 @@
+// File: prism-auth-service/internal/handlers/user.go
 package handlers
 
 import (
@@ -13,11 +14,15 @@ import (
 
 type UserHandler struct {
 	userService *services.UserService
-	authService *services.AuthService
+	authService *services.AuthService // Pastikan field ini ada dan digunakan
 }
 
-func NewUserHandler(userService *services.UserService) *UserHandler {
-	return &UserHandler{userService: userService}
+// [MODIFIKASI] Konstruktor sekarang menerima userService dan authService
+func NewUserHandler(userService *services.UserService, authService *services.AuthService) *UserHandler {
+	return &UserHandler{
+		userService: userService,
+		authService: authService, // Inisialisasi authService
+	}
 }
 
 func (h *UserHandler) GetUsers(c *gin.Context) {
@@ -157,6 +162,11 @@ func (h *UserHandler) ChangePassword(c *gin.Context) {
 		return
 	}
 
+	// Pastikan authService tidak nil sebelum dipanggil
+	if h.authService == nil {
+		utils.ErrorResponse(c, http.StatusInternalServerError, "Internal server error: auth service not configured for user handler", nil)
+		return
+	}
 	err := h.authService.ChangePassword(userID, &req, tenantID)
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusBadRequest, "Failed to change password", err)
@@ -244,16 +254,27 @@ func (h *UserHandler) DeleteRole(c *gin.Context) {
 // Helper methods
 func (h *UserHandler) getTenantID(c *gin.Context) string {
 	if tenantID, exists := c.Get("tenant_id"); exists {
-		return tenantID.(string)
+		if tidStr, ok := tenantID.(string); ok {
+			return tidStr
+		}
 	}
-	return "default"
+	return "default" // Default tenant
 }
 
 func (h *UserHandler) getUserID(c *gin.Context) uuid.UUID {
-	if userID, exists := c.Get("user_id"); exists {
-		if id, err := uuid.Parse(userID.(string)); err == nil {
-			return id
-		}
+	userIDVal, exists := c.Get("user_id")
+	if !exists {
+		return uuid.Nil // Atau handle error jika user_id wajib ada
 	}
-	return uuid.Nil
+
+	userIDStr, ok := userIDVal.(string)
+	if !ok {
+		return uuid.Nil // Atau handle error
+	}
+
+	parsedID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		return uuid.Nil // Atau handle error
+	}
+	return parsedID
 }

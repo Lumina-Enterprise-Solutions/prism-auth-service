@@ -2,9 +2,10 @@ package handlers
 
 import (
 	"net/http"
-
+	// <-- [TAMBAHKAN]
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/models"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/services"
+	commonLogger "github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/logger" // <-- [TAMBAHKAN]
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/utils"
 	"github.com/gin-gonic/gin"
 )
@@ -87,8 +88,34 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 }
 
 func (h *AuthHandler) Logout(c *gin.Context) {
-	// TODO: Implement token blacklisting/revocation
-	// For now, just return success as client will discard tokens
+	// Untuk logout, kita idealnya membutuhkan refresh token untuk dicabut.
+	// Refresh token biasanya tidak dikirim di Authorization header.
+	// Pilihan:
+	// 1. Client mengirim refresh token di body JSON.
+	// 2. Client mengirim access token di Auth header, server mencari refresh token terkait (lebih kompleks, perlu mapping).
+	// Kita akan pakai opsi 1 untuk kesederhanaan.
+
+	var req models.RefreshTokenRequest // Menggunakan model yang sama karena hanya butuh refresh_token
+	if err := c.ShouldBindJSON(&req); err != nil {
+		commonLogger.Warnf("Logout: Bad request for logout: %v", err)
+		utils.ErrorResponse(c, http.StatusBadRequest, "Invalid request payload", err)
+		return
+	}
+
+	if req.RefreshToken == "" {
+		commonLogger.Warn("Logout: Refresh token not provided in request.")
+		utils.ErrorResponse(c, http.StatusBadRequest, "Refresh token required", nil)
+		return
+	}
+
+	err := h.authService.Logout(req.RefreshToken)
+	if err != nil {
+		// Jangan ekspos error detail ke client untuk logout
+		commonLogger.Errorf("Logout: Service error during logout: %v", err)
+		utils.ErrorResponse(c, http.StatusInternalServerError, "Logout failed", nil) // Error generik
+		return
+	}
+
 	utils.SuccessResponse(c, "Logout successful", nil)
 }
 
