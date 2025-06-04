@@ -86,6 +86,7 @@ func main() {
 
 	userRepo := repository.NewUserRepository(db)
 	tenantRepo := repository.NewTenantRepository(db)
+	roleRepo := repository.NewRoleRepository(db) // <-- [TAMBAHKAN]
 
 	tenant, err := tenantRepo.GetBySlug("default")
 	if err != nil {
@@ -110,11 +111,12 @@ func main() {
 	jwtService := services.NewJWTService(cfg.JWT, redisClient)
 	// [MODIFIKASI] Teruskan redisClient ke AuthService jika AuthService perlu revoke token langsung
 	authAppService := services.NewAuthService(userRepo, jwtService, redisClient)
-	userAppService := services.NewUserService(userRepo, tenantRepo)
+	// [MODIFIKASI] Teruskan roleRepo ke NewUserService
+	userAppService := services.NewUserService(userRepo, tenantRepo, roleRepo)
 	commonLogger.Info("Application services initialized.")
 
 	authHandler := handlers.NewAuthHandler(authAppService)
-	userHandler := handlers.NewUserHandler(userAppService, authAppService) // Teruskan authService ke userHandler jika diperlukan untuk ChangePassword
+	userHandler := handlers.NewUserHandler(userAppService, authAppService)
 	healthHandler := handlers.NewHealthHandler()
 	commonLogger.Info("HTTP handlers initialized.")
 
@@ -163,7 +165,7 @@ func main() {
 func setupRouter(
 	cfg *commonConfig.Config,
 	authHandler *handlers.AuthHandler,
-	userHandler *handlers.UserHandler,
+	userHandler *handlers.UserHandler, // UserHandler sekarang menangani endpoint roles juga
 	healthHandler *handlers.HealthHandler,
 ) *gin.Engine {
 	ginMode := os.Getenv("GIN_MODE")
@@ -200,24 +202,36 @@ func setupRouter(
 			authGroup.POST("/reset-password", authHandler.ResetPassword)
 		}
 		protected := v1.Group("/")
-		protected.Use(commonMiddleware.RequireAuth(cfg.JWT))
+		protected.Use(commonMiddleware.RequireAuth(cfg.JWT)) // Middleware JWT untuk semua di 'protected'
+		// Tambahkan middleware RBAC di sini jika sudah siap
 		{
-			users := protected.Group("/users")
+			usersGroup := protected.Group("/users")
 			{
-				users.GET("/", userHandler.GetUsers)
-				users.GET("/:id", userHandler.GetUser)
-				users.PUT("/:id", userHandler.UpdateUser)
-				users.DELETE("/:id", userHandler.DeleteUser)
-				users.GET("/profile", userHandler.GetProfile)
-				users.PUT("/profile", userHandler.UpdateProfile)
-				users.POST("/change-password", userHandler.ChangePassword)
+				usersGroup.GET("/", userHandler.GetUsers)         // Membutuhkan: "users:read"
+				usersGroup.GET("/:id", userHandler.GetUser)       // Membutuhkan: "users:read"
+				usersGroup.PUT("/:id", userHandler.UpdateUser)    // Membutuhkan: "users:update"
+				usersGroup.DELETE("/:id", userHandler.DeleteUser) // Membutuhkan: "users:delete"
+				// Endpoint Create User mungkin lebih cocok di luar user specific /:id
+				// usersGroup.POST("/", userHandler.CreateUser) // Ini mungkin perlu di admin/users, bukan /users
+
+				usersGroup.GET("/profile", userHandler.GetProfile)              // User bisa lihat profil sendiri
+				usersGroup.PUT("/profile", userHandler.UpdateProfile)           // User bisa update profil sendiri
+				usersGroup.POST("/change-password", userHandler.ChangePassword) // User bisa ganti password sendiri
+
+				// User-Role specific endpoints
+				usersGroup.POST("/assign-role", userHandler.AssignRoleToUser)   // Membutuhkan: "users:manage_roles" atau "roles:assign"
+				usersGroup.POST("/revoke-role", userHandler.RevokeRoleFromUser) // Membutuhkan: "users:manage_roles" atau "roles:revoke"
+				usersGroup.GET("/:user_id/roles", userHandler.GetUserRoles)     // Membutuhkan: "users:read_roles"
 			}
-			roles := protected.Group("/roles")
+
+			// Endpoint untuk manajemen roles itu sendiri
+			rolesGroup := protected.Group("/roles")
 			{
-				roles.GET("/", userHandler.GetRoles)
-				roles.POST("/", userHandler.CreateRole)
-				roles.PUT("/:id", userHandler.UpdateRole)
-				roles.DELETE("/:id", userHandler.DeleteRole)
+				rolesGroup.GET("/", userHandler.GetRoles)              // Membutuhkan: "roles:read"
+				rolesGroup.POST("/", userHandler.CreateRole)           // Membutuhkan: "roles:create"
+				rolesGroup.GET("/:role_id", userHandler.GetRoleByID)   // Membutuhkan: "roles:read"
+				rolesGroup.PUT("/:role_id", userHandler.UpdateRole)    // Membutuhkan: "roles:update"
+				rolesGroup.DELETE("/:role_id", userHandler.DeleteRole) // Membutuhkan: "roles:delete"
 			}
 		}
 	}

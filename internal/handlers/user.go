@@ -176,7 +176,7 @@ func (h *UserHandler) ChangePassword(c *gin.Context) {
 	utils.SuccessResponse(c, "Password changed successfully", nil)
 }
 
-// Role management handlers
+// --- Role Management Handlers ---
 func (h *UserHandler) GetRoles(c *gin.Context) {
 	tenantID := h.getTenantID(c)
 
@@ -189,6 +189,26 @@ func (h *UserHandler) GetRoles(c *gin.Context) {
 	utils.SuccessResponse(c, "Roles retrieved successfully", roles)
 }
 
+func (h *UserHandler) GetRoleByID(c *gin.Context) {
+	tenantID := h.getTenantID(c)
+	roleID, err := uuid.Parse(c.Param("role_id")) // Sesuaikan dengan nama param di router
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, "Invalid role ID format", err)
+		return
+	}
+
+	role, err := h.userService.GetRoleByID(roleID, tenantID)
+	if err != nil {
+		if err.Error() == "role not found" {
+			utils.ErrorResponse(c, http.StatusNotFound, "Role not found", err)
+		} else {
+			utils.ErrorResponse(c, http.StatusInternalServerError, "Failed to get role", err)
+		}
+		return
+	}
+	utils.SuccessResponse(c, "Role retrieved successfully", role)
+}
+
 func (h *UserHandler) CreateRole(c *gin.Context) {
 	tenantID := h.getTenantID(c)
 
@@ -197,6 +217,10 @@ func (h *UserHandler) CreateRole(c *gin.Context) {
 		validationErrors := utils.FormatValidationErrors(err)
 		utils.ValidationErrorResponse(c, validationErrors)
 		return
+	}
+	// Validasi Permissions (contoh sederhana)
+	if req.Permissions == nil {
+		req.Permissions = make(map[string][]string) // Default ke map kosong jika nil
 	}
 
 	role, err := h.userService.CreateRole(&req, tenantID)
@@ -211,7 +235,7 @@ func (h *UserHandler) CreateRole(c *gin.Context) {
 func (h *UserHandler) UpdateRole(c *gin.Context) {
 	tenantID := h.getTenantID(c)
 
-	id, err := uuid.Parse(c.Param("id"))
+	id, err := uuid.Parse(c.Param("role_id")) // Sesuaikan nama param
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusBadRequest, "Invalid role ID", err)
 		return
@@ -236,7 +260,7 @@ func (h *UserHandler) UpdateRole(c *gin.Context) {
 func (h *UserHandler) DeleteRole(c *gin.Context) {
 	tenantID := h.getTenantID(c)
 
-	id, err := uuid.Parse(c.Param("id"))
+	id, err := uuid.Parse(c.Param("role_id")) // Sesuaikan nama param
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusBadRequest, "Invalid role ID", err)
 		return
@@ -249,6 +273,60 @@ func (h *UserHandler) DeleteRole(c *gin.Context) {
 	}
 
 	utils.SuccessResponse(c, "Role deleted successfully", nil)
+}
+
+// --- User-Role Assignment Handlers ---
+type AssignRevokeRoleRequest struct {
+	UserID uuid.UUID `json:"user_id" binding:"required"`
+	RoleID uuid.UUID `json:"role_id" binding:"required"`
+}
+
+func (h *UserHandler) AssignRoleToUser(c *gin.Context) {
+	tenantID := h.getTenantID(c)
+	var req AssignRevokeRoleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, utils.FormatValidationErrors(err))
+		return
+	}
+
+	err := h.userService.AssignRoleToUser(req.UserID, req.RoleID, tenantID)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, "Failed to assign role to user", err)
+		return
+	}
+	utils.SuccessResponse(c, "Role assigned to user successfully", nil)
+}
+
+func (h *UserHandler) RevokeRoleFromUser(c *gin.Context) {
+	tenantID := h.getTenantID(c)
+	var req AssignRevokeRoleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, utils.FormatValidationErrors(err))
+		return
+	}
+
+	err := h.userService.RevokeRoleFromUser(req.UserID, req.RoleID, tenantID)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, "Failed to revoke role from user", err)
+		return
+	}
+	utils.SuccessResponse(c, "Role revoked from user successfully", nil)
+}
+
+func (h *UserHandler) GetUserRoles(c *gin.Context) {
+	tenantID := h.getTenantID(c)
+	userID, err := uuid.Parse(c.Param("user_id")) // Sesuaikan dengan nama param di router
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, "Invalid user ID format", err)
+		return
+	}
+
+	roles, err := h.userService.GetUserRoles(userID, tenantID)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusInternalServerError, "Failed to get user roles", err)
+		return
+	}
+	utils.SuccessResponse(c, "User roles retrieved successfully", roles)
 }
 
 // Helper methods

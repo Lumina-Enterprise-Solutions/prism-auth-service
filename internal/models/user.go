@@ -12,8 +12,8 @@ type CreateUserRequest struct {
 	FirstName string   `json:"first_name" binding:"required"`
 	LastName  string   `json:"last_name" binding:"required"`
 	Password  string   `json:"password" binding:"required,min=6"`
-	Roles     []string `json:"roles"`
-	Status    string   `json:"status"`
+	Roles     []string `json:"roles"`  // Bisa berupa ID Role atau Nama Role
+	Status    string   `json:"status"` // e.g., "active", "inactive"
 }
 
 type UpdateUserRequest struct {
@@ -29,13 +29,13 @@ type UpdateProfileRequest struct {
 }
 
 type CreateRoleRequest struct {
-	Name        string                 `json:"name" binding:"required"`
-	Permissions map[string]interface{} `json:"permissions"`
+	Name        string              `json:"name" binding:"required"`
+	Permissions map[string][]string `json:"permissions"` // [MODIFIKASI] Sesuai PermissionMap
 }
 
 type UpdateRoleRequest struct {
-	Name        string                 `json:"name"`
-	Permissions map[string]interface{} `json:"permissions"`
+	Name        string              `json:"name,omitempty"`
+	Permissions map[string][]string `json:"permissions,omitempty"` // [MODIFIKASI]
 }
 
 type UserResponse struct {
@@ -50,23 +50,19 @@ type UserResponse struct {
 }
 
 type RoleResponse struct {
-	ID          uuid.UUID              `json:"id"`
-	Name        string                 `json:"name"`
-	Permissions map[string]interface{} `json:"permissions"`
-	CreatedAt   time.Time              `json:"created_at"`
-	UpdatedAt   time.Time              `json:"updated_at"`
+	ID          uuid.UUID           `json:"id"`
+	Name        string              `json:"name"`
+	Permissions map[string][]string `json:"permissions"` // [MODIFIKASI]
+	CreatedAt   time.Time           `json:"created_at"`
+	UpdatedAt   time.Time           `json:"updated_at"`
 }
 
-// Convert common User model to UserResponse
 func ToUserResponse(u *commonModels.User) UserResponse {
-	roles := make([]RoleResponse, len(u.Roles))
-	for i, role := range u.Roles {
-		roles[i] = RoleResponse{
-			ID:          role.ID,
-			Name:        role.Name,
-			Permissions: role.Permissions,
-			CreatedAt:   role.CreatedAt,
-			UpdatedAt:   role.UpdatedAt,
+	roles := make([]RoleResponse, 0) // Initialize as empty slice
+	if u.Roles != nil {              // Check if Roles is nil before iterating
+		roles = make([]RoleResponse, len(u.Roles))
+		for i, role := range u.Roles {
+			roles[i] = ToRoleResponse(&role) // Gunakan ToRoleResponse
 		}
 	}
 
@@ -79,5 +75,21 @@ func ToUserResponse(u *commonModels.User) UserResponse {
 		Roles:     roles,
 		CreatedAt: u.CreatedAt,
 		UpdatedAt: u.UpdatedAt,
+	}
+}
+
+// [TAMBAHKAN] Convert common Role model to RoleResponse
+func ToRoleResponse(r *commonModels.Role) RoleResponse {
+	// Pastikan permissions tidak nil di response jika di DB nil
+	permissions := make(map[string][]string)
+	if r.Permissions != nil {
+		permissions = r.Permissions
+	}
+	return RoleResponse{
+		ID:          r.ID,
+		Name:        r.Name,
+		Permissions: permissions,
+		CreatedAt:   r.CreatedAt,
+		UpdatedAt:   r.UpdatedAt,
 	}
 }
