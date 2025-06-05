@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS tenants (
+CREATE TABLE IF NOT EXISTS public.tenants (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name VARCHAR(255) NOT NULL,
     slug VARCHAR(100) UNIQUE NOT NULL,

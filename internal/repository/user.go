@@ -18,6 +18,10 @@ func NewUserRepository(db *database.PostgresDB) *UserRepository {
 }
 
 func (r *UserRepository) Create(user *models.User, tenantID string) error {
+	// Pastikan user.TenantID diisi sebelum create, bisa dari arg tenantID
+	if user.TenantID == "" {
+		user.TenantID = tenantID // Atau pastikan ini sudah diset oleh service
+	}
 	db := r.db.WithTenant(tenantID)
 	return db.Create(user).Error
 }
@@ -38,7 +42,8 @@ func (r *UserRepository) GetByID(id uuid.UUID, tenantID string) (*models.User, e
 func (r *UserRepository) GetByEmail(email, tenantID string) (*models.User, error) {
 	var user models.User
 	db := r.db.WithTenant(tenantID)
-	err := db.Preload("Roles").First(&user, "email = ?", email).Error
+	// Tambahkan filter tenant_id jika belum ada di model User dan query
+	err := db.Preload("Roles").First(&user, "email = ? AND tenant_id = ?", email, tenantID).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
@@ -49,6 +54,10 @@ func (r *UserRepository) GetByEmail(email, tenantID string) (*models.User, error
 }
 
 func (r *UserRepository) Update(user *models.User, tenantID string) error {
+	// Sama, pastikan user.TenantID ada dan sesuai
+	if user.TenantID == "" {
+		user.TenantID = tenantID
+	}
 	db := r.db.WithTenant(tenantID)
 	return db.Save(user).Error
 }
@@ -77,4 +86,29 @@ func (r *UserRepository) List(tenantID string, offset, limit int) ([]models.User
 func (r *UserRepository) UpdatePassword(userID uuid.UUID, hashedPassword, tenantID string) error {
 	db := r.db.WithTenant(tenantID)
 	return db.Model(&models.User{}).Where("id = ?", userID).Update("password_hash", hashedPassword).Error
+}
+
+// [TAMBAHKAN] GetByADObjectID mengambil user berdasarkan AD Object GUID dan TenantID
+func (r *UserRepository) GetByADObjectID(adObjectID string, tenantID string) (*models.User, error) {
+	var user models.User
+	db := r.db.WithTenant(tenantID) // Penting jika user di-scope per tenant
+	// Jika adObjectID global unik, tenantID mungkin tidak perlu di query ini, tapi bagus untuk konsistensi.
+	// Jika model User memiliki field TenantID, maka query harus menyertakannya.
+	err := db.Preload("Roles").First(&user, "ad_object_id = ? AND tenant_id = ?", adObjectID, tenantID).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &user, nil
+}
+
+// [TAMBAHKAN] ListADManagedByTenant mengambil semua user yang AD-managed untuk tenant tertentu
+func (r *UserRepository) ListADManagedByTenant(tenantID string) ([]models.User, error) {
+	var users []models.User
+	db := r.db.WithTenant(tenantID)
+	// Pastikan filter tenant_id juga diterapkan jika User model punya field TenantID
+	err := db.Where("is_ad_managed = ? AND tenant_id = ?", true, tenantID).Find(&users).Error
+	return users, err
 }

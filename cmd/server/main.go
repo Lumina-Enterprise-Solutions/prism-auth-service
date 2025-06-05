@@ -30,6 +30,34 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "sync-ad" {
+		cfg, err := commonConfig.Load()
+		if err != nil {
+			commonLogger.Fatal("CLI: Failed to load config for sync", "error", err)
+			os.Exit(1)
+		}
+		db, err := commonDb.NewPostgresConnection(&cfg.Database)
+		if err != nil {
+			commonLogger.Fatal("CLI: Failed to connect to DB for sync", "error", err)
+			os.Exit(1)
+		}
+
+		userRepo := repository.NewUserRepository(db)
+		roleRepo := repository.NewRoleRepository(db)
+		adMappingRepo := repository.NewADMappingRepository(db)
+		tenantRepo := repository.NewTenantRepository(db)
+
+		adSyncSvc := services.NewADSyncService(userRepo, roleRepo, adMappingRepo, tenantRepo, cfg) // adSyncSvc digunakan di sini
+		commonLogger.Info("CLI: Starting AD Sync job...")
+		err = adSyncSvc.SyncAllTenants(context.Background())
+		if err != nil {
+			commonLogger.Fatal("CLI: AD Sync job failed", "error", err)
+			os.Exit(1)
+		}
+		commonLogger.Info("CLI: AD Sync job completed successfully.")
+		os.Exit(0)
+		return // Penting untuk keluar setelah mode CLI selesai
+	}
 	cfg, err := commonConfig.Load()
 	if err != nil {
 		stdlog.Fatalf("FATAL: Failed to load application configuration: %v", err)
@@ -87,7 +115,8 @@ func main() {
 
 	userRepo := repository.NewUserRepository(db)
 	tenantRepo := repository.NewTenantRepository(db)
-	roleRepo := repository.NewRoleRepository(db) // roleRepo sudah ada
+	roleRepo := repository.NewRoleRepository(db)           // roleRepo sudah ada
+	adMappingRepo := repository.NewADMappingRepository(db) // <-- [TAMBAHKAN]
 
 	tenant, err := tenantRepo.GetBySlug("default")
 	if err != nil {
@@ -111,18 +140,20 @@ func main() {
 	// [MODIFIKASI] Teruskan redisClient ke JWTService
 	jwtService := services.NewJWTService(cfg.JWT, redisClient)
 	// [MODIFIKASI] Teruskan redisClient ke AuthService jika AuthService perlu revoke token langsung
-	authAppService := services.NewAuthService(userRepo, jwtService, redisClient)
+	authAppService := services.NewAuthService(userRepo, roleRepo, adMappingRepo, jwtService, redisClient, cfg)
 	// [MODIFIKASI] Teruskan roleRepo ke NewUserService
 	userAppService := services.NewUserService(userRepo, tenantRepo, roleRepo)
+	adMappingSvc := services.NewADMappingService(adMappingRepo, roleRepo) // <-- adMappingSvc dideklarasikan di sini
 	commonLogger.Info("Application services initialized.")
 
 	authHandler := handlers.NewAuthHandler(authAppService)
 	userHandler := handlers.NewUserHandler(userAppService, authAppService)
 	healthHandler := handlers.NewHealthHandler()
+	adMappingHandler := handlers.NewADMappingHandler(adMappingSvc) // adMappingSvc digunakan di sini
 	commonLogger.Info("HTTP handlers initialized.")
 
 	// [MODIFIKASI] Teruskan roleRepo (sebagai RBACPermissionChecker) ke setupRouter
-	router := setupRouter(cfg, authHandler, userHandler, healthHandler, roleRepo)
+	router := setupRouter(cfg, authHandler, userHandler, healthHandler, roleRepo, adMappingHandler)
 	commonLogger.Info("HTTP router configured.")
 
 	serverAddr := fmt.Sprintf(":%d", cfg.Server.Port)
@@ -170,7 +201,8 @@ func setupRouter(
 	authHandler *handlers.AuthHandler,
 	userHandler *handlers.UserHandler,
 	healthHandler *handlers.HealthHandler,
-	permissionChecker serviceMiddleware.RBACPermissionChecker, // <-- [MODIFIKASI]
+	permissionChecker serviceMiddleware.RBACPermissionChecker,
+	adMappingHandler *handlers.ADMappingHandler, // <-- [MODIFIKASI]
 ) *gin.Engine {
 	ginMode := os.Getenv("GIN_MODE")
 	if ginMode == "" {
@@ -240,6 +272,21 @@ func setupRouter(
 				rolesGroup.GET("/:role_id", serviceMiddleware.RequirePermission(permissionChecker, "roles:read"), userHandler.GetRoleByID)
 				rolesGroup.PUT("/:role_id", serviceMiddleware.RequirePermission(permissionChecker, "roles:update"), userHandler.UpdateRole)
 				rolesGroup.DELETE("/:role_id", serviceMiddleware.RequirePermission(permissionChecker, "roles:delete"), userHandler.DeleteRole)
+			}
+		}
+		// Grup untuk endpoint administrasi sistem
+		adminSystemGroup := v1.Group("/system-admin") // Atau nama lain yang sesuai
+		adminSystemGroup.Use(serviceMiddleware.RequireAuth(cfg.JWT))
+		// Idealnya, permission yang sangat spesifik untuk admin sistem
+		adminSystemGroup.Use(serviceMiddleware.RequirePermission(permissionChecker, "system:manage_settings"))
+		{
+			adMappings := adminSystemGroup.Group("/ad-mappings")
+			{
+				adMappings.POST("/", adMappingHandler.CreateADMapping)              // Needs: system:manage_ad_mappings (atau lebih granular: ad_mappings:create)
+				adMappings.GET("/", adMappingHandler.GetADMappings)                 // Needs: ad_mappings:read
+				adMappings.GET("/:mapping_id", adMappingHandler.GetADMappingByID)   // Needs: ad_mappings:read
+				adMappings.PUT("/:mapping_id", adMappingHandler.UpdateADMapping)    // Needs: ad_mappings:update
+				adMappings.DELETE("/:mapping_id", adMappingHandler.DeleteADMapping) // Needs: ad_mappings:delete
 			}
 		}
 	}
