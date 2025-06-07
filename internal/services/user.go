@@ -108,7 +108,7 @@ func (s *UserService) CreateUser(req *models.CreateUserRequest, tenantID string)
 				commonLogger.Warnf("Role '%s' not found for tenant '%s' during user '%s' creation.", roleNameOrID, tenantID, user.Email)
 				continue
 			}
-			if errAssign := s.roleRepo.AssignRoleToUser(user.ID, roleToAssign.ID, tenantID); errAssign != nil {
+			if errAssign := s.roleRepo.AssignRoleToUser(user, roleToAssign.ID, tenantID); errAssign != nil {
 				commonLogger.Warnf("Failed to assign role '%s' to user '%s': %v", roleNameOrID, user.Email, errAssign)
 				// Lanjutkan atau gagalkan?
 			}
@@ -330,7 +330,9 @@ func (s *UserService) AssignRoleToUser(userID, roleID uuid.UUID, tenantID string
 	}
 
 	commonLogger.Infof("Assigning role '%s' (ID: %s) to user '%s' (ID: %s) for tenant '%s'", role.Name, role.ID, user.Email, user.ID, tenantID)
-	return s.roleRepo.AssignRoleToUser(userID, roleID, tenantID)
+	// vvvvvvvvvv FIX vvvvvvvvvvvv
+	return s.roleRepo.AssignRoleToUser(user, roleID, tenantID)
+	// ^^^^^^^^^^^^ FIX ^^^^^^^^^^^^
 }
 
 func (s *UserService) RevokeRoleFromUser(userID, roleID uuid.UUID, tenantID string) error {
@@ -350,7 +352,9 @@ func (s *UserService) RevokeRoleFromUser(userID, roleID uuid.UUID, tenantID stri
 		return errors.New("role not found")
 	}
 	commonLogger.Infof("Revoking role '%s' (ID: %s) from user '%s' (ID: %s) for tenant '%s'", role.Name, role.ID, user.Email, user.ID, tenantID)
-	return s.roleRepo.RevokeRoleFromUser(userID, roleID, tenantID)
+	// vvvvvvvvvv FIX vvvvvvvvvvvv
+	return s.roleRepo.RevokeRoleFromUser(user, roleID, tenantID)
+	// ^^^^^^^^^^^^ FIX ^^^^^^^^^^^^
 }
 
 func (s *UserService) GetUserRoles(userID uuid.UUID, tenantID string) ([]models.RoleResponse, error) {

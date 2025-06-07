@@ -8,6 +8,7 @@ import (
 	commonModels "github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/models"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type RoleRepository struct {
@@ -72,42 +73,29 @@ func (r *RoleRepository) Delete(id uuid.UUID, tenantID string) error {
 	return db.Delete(&commonModels.Role{}, "id = ?", id).Error
 }
 
-// AssignRoleToUser menetapkan role ke user
-func (r *RoleRepository) AssignRoleToUser(userID, roleID uuid.UUID, tenantID string) error {
+func (r *RoleRepository) AssignRoleToUser(user *commonModels.User, roleID uuid.UUID, tenantID string) error {
 	db := r.db.WithTenant(tenantID)
-	// [DIHAPUS] Deklarasi userRole yang tidak digunakan
-	// userRole := struct {
-	// 	UserID uuid.UUID `gorm:"primaryKey"`
-	// 	RoleID uuid.UUID `gorm:"primaryKey"`
-	// }{UserID: userID, RoleID: roleID}
 
-	// GORM akan mencari user dengan ID `userID` dan menambahkan role dengan ID `roleID`
-	// ke dalam association "Roles" milik user tersebut. Ini akan membuat entri di tabel user_roles.
-	// Pastikan model User dan Role Anda memiliki relasi many2many yang benar:
-	// User struct: Roles []Role `gorm:"many2many:user_roles;"`
-	// Role struct: Users []User `gorm:"many2many:user_roles;"`
-	user := &commonModels.User{}
-	user.ID = userID // Set ID user yang akan di-update asosiasinya
+	// roleToAppend := &commonModels.Role{}
+	// roleToAppend.ID = roleID
+	userRole := map[string]interface{}{
+		"user_id": user.ID,
+		"role_id": roleID,
+	}
 
-	roleToAppend := &commonModels.Role{}
-	roleToAppend.ID = roleID // Set ID role yang akan ditambahkan
-
-	// Penting: Pastikan db.WithTenant(tenantID) sudah mengatur search_path yang benar
-	// sehingga GORM tahu di schema mana tabel user_roles berada.
-	return db.Model(user).Association("Roles").Append(roleToAppend)
+	// This is now more explicit: append the role to this specific user object's "Roles" association.
+	// return db.Model(user).Association("Roles").Append(roleToAppend)
+	return db.Table("user_roles").Clauses(clause.OnConflict{DoNothing: true}).Create(&userRole).Error
 }
 
-// RevokeRoleFromUser menghapus role dari user
-func (r *RoleRepository) RevokeRoleFromUser(userID, roleID uuid.UUID, tenantID string) error {
+func (r *RoleRepository) RevokeRoleFromUser(user *commonModels.User, roleID uuid.UUID, tenantID string) error {
 	db := r.db.WithTenant(tenantID)
 
-	user := &commonModels.User{}
-	user.ID = userID
+	// roleToDelete := &commonModels.Role{}
+	// roleToDelete.ID = roleID
 
-	roleToDelete := &commonModels.Role{}
-	roleToDelete.ID = roleID
-
-	return db.Model(user).Association("Roles").Delete(roleToDelete)
+	// return db.Model(user).Association("Roles").Delete(roleToDelete)
+	return db.Table("user_roles").Where("user_id = ? AND role_id = ?", user.ID, roleID).Delete(nil).Error
 }
 
 // GetUserRoles mengambil semua role yang dimiliki oleh user

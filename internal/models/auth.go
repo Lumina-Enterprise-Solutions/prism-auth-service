@@ -3,6 +3,7 @@ package models
 import (
 	"time"
 
+	commonModels "github.com/Lumina-Enterprise-Solutions/prism-common-libs/pkg/models"
 	"github.com/golang-jwt/jwt/v4"
 )
 
@@ -35,6 +36,24 @@ type UserInfo struct {
 	Status    string   `json:"status"`
 	Roles     []string `json:"roles"`
 	TenantID  string   `json:"tenant_id"`
+}
+
+// [TAMBAHKAN] Helper function untuk konversi
+func ToUserInfo(user *commonModels.User) UserInfo {
+	roleNames := make([]string, len(user.Roles))
+	for i, role := range user.Roles {
+		roleNames[i] = role.Name
+	}
+
+	return UserInfo{
+		ID:        user.ID.String(),
+		Email:     user.Email,
+		FirstName: user.FirstName,
+		LastName:  user.LastName,
+		Status:    user.Status,
+		Roles:     roleNames,
+		TenantID:  user.TenantID,
+	}
 }
 
 type RefreshTokenRequest struct {

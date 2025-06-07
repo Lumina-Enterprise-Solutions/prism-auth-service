@@ -1,8 +1,6 @@
 github.com/Azure/go-ntlmssp v0.0.0-20221128193559-754e69321358 h1:mFRzDkZVAjdal+s7s0MwaRv9igoPqLRdzOLzw/8Xvq8=
 github.com/Azure/go-ntlmssp v0.0.0-20221128193559-754e69321358/go.mod h1:chxPXzSsl7ZWRAuOIE23GDNzjWuZquvFlgA8xmpunjU=
 github.com/DataDog/datadog-go v3.2.0+incompatible/go.mod h1:LButxg5PwREeZtORoXG3tL4fMGNddJ+vMq1mwgfaqoQ=
-github.com/Lumina-Enterprise-Solutions/prism-common-libs v0.1.4 h1:zqArcuXKxFRwz6jxHq2gQbUqJ/btSz/2f2FK7lKIrMI=
-github.com/Lumina-Enterprise-Solutions/prism-common-libs v0.1.4/go.mod h1:pIe99X/X8447u85sC3TJP6vbDeAiCZ4y5WHuVrpWr70=
 github.com/Lumina-Enterprise-Solutions/prism-common-libs v0.1.5-0.20250605065145-7e3d0667566a h1:CruFPxIhkr5mE7Kt6erQpMTkmcykdz7o0zTA61UFHKA=
 github.com/Lumina-Enterprise-Solutions/prism-common-libs v0.1.5-0.20250605065145-7e3d0667566a/go.mod h1:pIe99X/X8447u85sC3TJP6vbDeAiCZ4y5WHuVrpWr70=
 github.com/alecthomas/template v0.0.0-20160405071501-a0175ee3bccc/go.mod h1:LOuyumcjzFXgccqObfd/Ljyb9UuFJ6TxHnclSeseNhc=

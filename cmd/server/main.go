@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-ldap/ldap/v3"
 	"github.com/google/uuid"
 
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/handlers"
@@ -58,9 +59,22 @@ func main() {
 		os.Exit(0)
 		return // Penting untuk keluar setelah mode CLI selesai
 	}
-	cfg, err := commonConfig.Load()
+	var cfg *commonConfig.Config
+	var err error
+
+	// Coba muat konfigurasi beberapa kali
+	maxRetries := 5
+	retryDelay := 5 * time.Second
+	for i := 0; i < maxRetries; i++ {
+		cfg, err = commonConfig.Load()
+		if err == nil {
+			break // Sukses, keluar dari loop
+		}
+		stdlog.Printf("WARN: Failed to load configuration (attempt %d/%d): %v. Retrying in %v...", i+1, maxRetries, err, retryDelay)
+		time.Sleep(retryDelay)
+	}
 	if err != nil {
-		stdlog.Fatalf("FATAL: Failed to load application configuration: %v", err)
+		stdlog.Fatalf("FATAL: Could not load configuration after %d attempts: %v", maxRetries, err)
 	}
 	commonLogger.Info("Application configuration loaded successfully.")
 
@@ -70,15 +84,34 @@ func main() {
 	}
 	commonLogger.Info("Database connection established.")
 
-	// [TAMBAHKAN] Inisialisasi Redis Client
-	redisClient := commonCache.NewRedisClient(cfg.Redis) // cfg.Redis diisi oleh commonConfig.Load()
-	// Ping untuk memastikan koneksi (opsional tapi bagus untuk startup check)
-	if _, err := redisClient.Exists(context.Background(), "startup_ping"); err != nil { // Menggunakan Exists sebagai ping sederhana
+	redisClient := commonCache.NewRedisClient(cfg.Redis)
+	if _, err := redisClient.Exists(context.Background(), "startup_ping"); err != nil {
 		commonLogger.Warn("Could not connect to Redis or Redis is not ready", "error", err)
-		// Anda mungkin ingin menggagalkan startup jika Redis krusial:
-		// commonLogger.Fatal("Failed to connect to Redis", "error", err)
 	} else {
 		commonLogger.Info("Redis connection established.")
+	}
+
+	// [TAMBAHKAN] Tunggu LDAP siap SEBELUM menginisialisasi service
+	if cfg.LDAP.Host != "" {
+		commonLogger.Info("LDAP is configured, waiting for it to be ready...")
+		ldapURL := fmt.Sprintf("ldap://%s:%d", cfg.LDAP.Host, cfg.LDAP.Port)
+		for i := 0; i < maxRetries; i++ {
+			l, err := ldap.DialURL(ldapURL)
+			if err == nil {
+				// Coba bind sebagai service account untuk memastikan siap
+				err = l.Bind(cfg.LDAP.BindDN, cfg.LDAP.BindPassword)
+				l.Close() // Selalu tutup koneksi setelah tes
+				if err == nil {
+					commonLogger.Info("LDAP is ready and service account bind is successful.")
+					break // Sukses, keluar dari loop
+				}
+			}
+			commonLogger.Warnf("LDAP not ready yet (attempt %d/%d): %v. Retrying in %v...", i+1, maxRetries, err, retryDelay)
+			time.Sleep(retryDelay)
+			if i == maxRetries-1 {
+				commonLogger.Fatal("Could not connect to LDAP after multiple retries.")
+			}
+		}
 	}
 
 	consulDiscoveryClient, err := discovery.NewConsulClient(cfg)
@@ -115,8 +148,8 @@ func main() {
 
 	userRepo := repository.NewUserRepository(db)
 	tenantRepo := repository.NewTenantRepository(db)
-	roleRepo := repository.NewRoleRepository(db)           // roleRepo sudah ada
-	adMappingRepo := repository.NewADMappingRepository(db) // <-- [TAMBAHKAN]
+	roleRepo := repository.NewRoleRepository(db)
+	adMappingRepo := repository.NewADMappingRepository(db)
 
 	tenant, err := tenantRepo.GetBySlug("default")
 	if err != nil {
@@ -137,19 +170,16 @@ func main() {
 		commonLogger.Info("Default tenant found.")
 	}
 
-	// [MODIFIKASI] Teruskan redisClient ke JWTService
 	jwtService := services.NewJWTService(cfg.JWT, redisClient)
-	// [MODIFIKASI] Teruskan redisClient ke AuthService jika AuthService perlu revoke token langsung
 	authAppService := services.NewAuthService(userRepo, roleRepo, adMappingRepo, jwtService, redisClient, cfg)
-	// [MODIFIKASI] Teruskan roleRepo ke NewUserService
 	userAppService := services.NewUserService(userRepo, tenantRepo, roleRepo)
-	adMappingSvc := services.NewADMappingService(adMappingRepo, roleRepo) // <-- adMappingSvc dideklarasikan di sini
+	adMappingSvc := services.NewADMappingService(adMappingRepo, roleRepo)
 	commonLogger.Info("Application services initialized.")
 
 	authHandler := handlers.NewAuthHandler(authAppService)
 	userHandler := handlers.NewUserHandler(userAppService, authAppService)
 	healthHandler := handlers.NewHealthHandler()
-	adMappingHandler := handlers.NewADMappingHandler(adMappingSvc) // adMappingSvc digunakan di sini
+	adMappingHandler := handlers.NewADMappingHandler(adMappingSvc)
 	commonLogger.Info("HTTP handlers initialized.")
 
 	// [MODIFIKASI] Teruskan roleRepo (sebagai RBACPermissionChecker) ke setupRouter
@@ -232,13 +262,12 @@ func setupRouter(
 			authGroup.POST("/login", authHandler.Login)
 			authGroup.POST("/register", authHandler.Register)
 			authGroup.POST("/refresh", authHandler.RefreshToken)
-			// [TAMBAHKAN] Logout endpoint baru
-			authGroup.POST("/logout", commonMiddleware.RequireAuth(cfg.JWT), authHandler.Logout) // Logout perlu diautentikasi untuk tahu token mana yang direvoke
+			authGroup.POST("/logout", commonMiddleware.RequireAuth(cfg.JWT), authHandler.Logout)
 			authGroup.POST("/forgot-password", authHandler.ForgotPassword)
 			authGroup.POST("/reset-password", authHandler.ResetPassword)
 		}
 		protected := v1.Group("/")
-		protected.Use(commonMiddleware.RequireAuth(cfg.JWT)) // Middleware JWT untuk semua di 'protected'
+		protected.Use(serviceMiddleware.RequireAuth(cfg.JWT)) // Middleware JWT untuk semua di 'protected'
 		// Tambahkan middleware RBAC di sini jika sudah siap
 		{
 			usersGroup := protected.Group("/users")

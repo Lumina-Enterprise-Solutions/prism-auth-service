@@ -359,7 +359,7 @@ func (s *ADSyncService) syncUserRolesFromADGroupsInternal(localUser *commonModel
 			// Cek apakah role ini memang berasal dari AD (jika ada flagnya).
 			// Untuk sekarang, kita revoke saja.
 			commonLogger.Info(ctx, "ADSyncRoles: Revoking role for user", "role_id", currentRole.ID, "role_name", currentRole.Name, "user_id", localUser.ID)
-			if errRevoke := s.roleRepo.RevokeRoleFromUser(localUser.ID, currentRole.ID, tenantID); errRevoke != nil {
+			if errRevoke := s.roleRepo.RevokeRoleFromUser(localUser, currentRole.ID, tenantID); errRevoke != nil {
 				commonLogger.Warn(ctx, "ADSyncRoles: Failed to revoke role", "role_id", currentRole.ID, "user_id", localUser.ID, "error", errRevoke)
 			}
 		}
@@ -373,7 +373,7 @@ func (s *ADSyncService) syncUserRolesFromADGroupsInternal(localUser *commonModel
 				roleNameForLog = roleDetails.Name
 			}
 			commonLogger.Info(ctx, "ADSyncRoles: Assigning role to user", "role_id", roleID, "role_name", roleNameForLog, "user_id", localUser.ID)
-			if errAssign := s.roleRepo.AssignRoleToUser(localUser.ID, roleID, tenantID); errAssign != nil {
+			if errAssign := s.roleRepo.AssignRoleToUser(localUser, roleID, tenantID); errAssign != nil {
 				if !strings.Contains(strings.ToLower(errAssign.Error()), "already has this role") && !strings.Contains(strings.ToLower(errAssign.Error()), "unique constraint") {
 					commonLogger.Warn(ctx, "ADSyncRoles: Failed to assign role", "role_id", roleID, "user_id", localUser.ID, "error", errAssign)
 				}
