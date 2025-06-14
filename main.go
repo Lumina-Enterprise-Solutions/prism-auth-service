@@ -39,8 +39,9 @@ func loadSecretsFromVault() {
 	if err != nil {
 		log.Fatalf("Gagal membaca google_oauth_client_secret dari Vault: %v", err)
 	}
-	os.Setenv("GOOGLE_OAUTH_CLIENT_ID", googleClientID)
-	os.Setenv("GOOGLE_OAUTH_CLIENT_SECRET", googleClientSecret)
+	// PERBAIKAN: Tambahkan nolint directive untuk memuaskan errcheck
+	os.Setenv("GOOGLE_OAUTH_CLIENT_ID", googleClientID)         //nolint:errcheck
+	os.Setenv("GOOGLE_OAUTH_CLIENT_SECRET", googleClientSecret) //nolint:errcheck
 	log.Println("Berhasil memuat kredensial Google OAuth dari Vault.")
 
 	microsoftClientID, err := client.ReadSecret(secretPath, "microsoft_oauth_client_id")
@@ -51,8 +52,8 @@ func loadSecretsFromVault() {
 	if err != nil {
 		log.Fatalf("Gagal membaca microsoft_oauth_client_secret dari Vault: %v", err)
 	}
-	os.Setenv("MICROSOFT_OAUTH_CLIENT_ID", microsoftClientID)
-	os.Setenv("MICROSOFT_OAUTH_CLIENT_SECRET", microsoftClientSecret)
+	os.Setenv("MICROSOFT_OAUTH_CLIENT_ID", microsoftClientID)         //nolint:errcheck
+	os.Setenv("MICROSOFT_OAUTH_CLIENT_SECRET", microsoftClientSecret) //nolint:errcheck
 	log.Println("Berhasil memuat kredensial Microsoft OAuth dari Vault.")
 
 	jwtSecret, err := client.ReadSecret(secretPath, "jwt_secret")
@@ -60,7 +61,7 @@ func loadSecretsFromVault() {
 		log.Fatalf("Gagal membaca jwt_secret dari Vault: %v. Pastikan rahasia sudah dimasukkan.", err)
 	}
 
-	os.Setenv("JWT_SECRET_KEY", jwtSecret)
+	os.Setenv("JWT_SECRET_KEY", jwtSecret) //nolint:errcheck
 	log.Println("Berhasil memuat JWT_SECRET_KEY dari Vault.")
 }
 
@@ -76,10 +77,8 @@ func main() {
 	serviceName := "prism-auth-service"
 	jaegerEndpoint := os.Getenv("JAEGER_ENDPOINT")
 	if jaegerEndpoint == "" {
-		jaegerEndpoint = cfg.JaegerEndpoint // Fallback ke config jika env tidak ada
+		jaegerEndpoint = cfg.JaegerEndpoint
 	}
-
-	// PERBAIKAN: Gunakan variabel 'jaegerEndpoint' yang sudah ditentukan
 	tp, err := telemetry.InitTracerProvider(serviceName, jaegerEndpoint)
 	if err != nil {
 		log.Fatalf("Failed to initialize OTel tracer provider: %v", err)

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io" // <-- TAMBAHKAN
 	"log"
 	"net/http"
 	"time"
@@ -63,7 +64,12 @@ func (c *NotificationClient) SendWelcomeEmail(ctx context.Context, email, firstN
 			log.Printf("[ERROR] Failed to send notification: %v", err)
 			return
 		}
-		defer resp.Body.Close()
+		// PERBAIKAN: Cek error saat menutup body response
+		defer func(Body io.ReadCloser) {
+			if err := Body.Close(); err != nil {
+				log.Printf("[ERROR] Failed to close notification service response body: %v", err)
+			}
+		}(resp.Body)
 
 		if resp.StatusCode != http.StatusOK {
 			log.Printf("[ERROR] Notification service returned non-200 status: %s", resp.Status)
