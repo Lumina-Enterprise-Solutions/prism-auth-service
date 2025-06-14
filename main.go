@@ -11,8 +11,8 @@ import (
 	authredis "github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/redis"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/repository"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/service"
-	commonjwt "github.com/Lumina-Enterprise-Solutions/prism-common-libs/auth" // <-- Import with alias
-	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/client"         // <-- TAMBAHKAN
+	commonjwt "github.com/Lumina-Enterprise-Solutions/prism-common-libs/auth"
+	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/client"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/ginutil"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/telemetry"
 	"github.com/gin-contrib/pprof"
@@ -29,7 +29,6 @@ func loadSecretsFromVault() {
 		log.Fatalf("Gagal membuat klien Vault: %v", err)
 	}
 
-	// Path rahasia di Vault. Kita akan menggunakan 'secret/data/prism'
 	secretPath := "secret/data/prism"
 
 	googleClientID, err := client.ReadSecret(secretPath, "google_oauth_client_id")
@@ -56,13 +55,11 @@ func loadSecretsFromVault() {
 	os.Setenv("MICROSOFT_OAUTH_CLIENT_SECRET", microsoftClientSecret)
 	log.Println("Berhasil memuat kredensial Microsoft OAuth dari Vault.")
 
-	// Baca 'jwt_secret' dari path di atas
 	jwtSecret, err := client.ReadSecret(secretPath, "jwt_secret")
 	if err != nil {
 		log.Fatalf("Gagal membaca jwt_secret dari Vault: %v. Pastikan rahasia sudah dimasukkan.", err)
 	}
 
-	// Set sebagai environment variable agar kode yang ada tidak perlu diubah
 	os.Setenv("JWT_SECRET_KEY", jwtSecret)
 	log.Println("Berhasil memuat JWT_SECRET_KEY dari Vault.")
 }
@@ -79,9 +76,11 @@ func main() {
 	serviceName := "prism-auth-service"
 	jaegerEndpoint := os.Getenv("JAEGER_ENDPOINT")
 	if jaegerEndpoint == "" {
-		jaegerEndpoint = "jaeger:4317"
+		jaegerEndpoint = cfg.JaegerEndpoint // Fallback ke config jika env tidak ada
 	}
-	tp, err := telemetry.InitTracerProvider(cfg.ServiceName, cfg.JaegerEndpoint)
+
+	// PERBAIKAN: Gunakan variabel 'jaegerEndpoint' yang sudah ditentukan
+	tp, err := telemetry.InitTracerProvider(serviceName, jaegerEndpoint)
 	if err != nil {
 		log.Fatalf("Failed to initialize OTel tracer provider: %v", err)
 	}
@@ -103,21 +102,17 @@ func main() {
 	authSvc := service.NewAuthService(userRepo)
 	authHandler := handler.NewAuthHandler(authSvc)
 	portStr := strconv.Itoa(cfg.Port)
-	// port, _ := strconv.Atoi(portStr)
-	// consul.RegisterAuthService(port)
+
 	log.Printf("Service configured to run on port %s", portStr)
 
-	// Initialize Gin Router
 	router := gin.Default()
 	router.Use(otelgin.Middleware(serviceName))
 	p := ginprometheus.NewPrometheus("gin")
 	p.Use(router)
 	pprof.Register(router)
 
-	// --- Group routes ---
 	authRoutes := router.Group("/auth")
 	{
-		// Public routes
 		authRoutes.POST("/register", authHandler.Register)
 		authRoutes.POST("/login", authHandler.Login)
 		authRoutes.POST("/refresh", authHandler.Refresh)
@@ -125,9 +120,8 @@ func main() {
 		authRoutes.GET("/google/callback", authHandler.GoogleCallback)
 		authRoutes.GET("/microsoft/login", authHandler.MicrosoftLogin)
 		authRoutes.GET("/microsoft/callback", authHandler.MicrosoftCallback)
-		authRoutes.POST("/login/2fa", authHandler.LoginWith2FA) // Rute publik untuk login tahap 2
+		authRoutes.POST("/login/2fa", authHandler.LoginWith2FA)
 
-		// Protected routes group
 		protected := authRoutes.Group("/")
 		protected.Use(commonjwt.JWTMiddleware())
 		{
@@ -138,14 +132,7 @@ func main() {
 		}
 	}
 
-	// Option 1: Health routes within the auth group only (/auth/health)
 	ginutil.SetupHealthRoutesForGroup(authRoutes, "prism-auth-service", "1.0.0")
-
-	// Option 2: Health routes at both root and group level (/health and /auth/health)
-	// handlers.SetupBothHealthRoutes(router, authRoutes, "prism-auth-service", "1.0.0")
-
-	// Option 3: Only root level health routes (/health)
-	// handlers.SetupHealthRoutes(router, "prism-auth-service", "1.0.0")
 
 	log.Printf("Starting %s on port %s", cfg.ServiceName, portStr)
 	if err := router.Run(":" + portStr); err != nil {
