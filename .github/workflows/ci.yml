@@ -87,7 +87,6 @@ jobs:
 
     - name: Build the application
       run: go build -v -o ./app ./main.go
-
-    - name: Build Docker image
-      # Memastikan Dockerfile valid dan bisa membangun image.
-      run: docker build . -t lumina-enterprise-solutions/prism-auth-service:${{ github.sha }}
+    # - name: Build Docker image
+    #   # Memastikan Dockerfile valid dan bisa membangun image.
+    #   run: docker build . -t lumina-enterprise-solutions/prism-auth-service:${{ github.sha }}
