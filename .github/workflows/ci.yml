@@ -1,0 +1,93 @@
+name: Prism Auth Service CI
+
+on:
+  push:
+    branches:
+    - main
+    - develop
+    - 'feature/**'
+    - 'bugfix/**'
+    - 'hotfix/**'
+  pull_request:
+    branches:
+    - main
+    - develop
+
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    # Menentukan service yang dibutuhkan oleh job ini
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: prismuser
+          POSTGRES_PASSWORD: prismpassword
+          POSTGRES_DB: prism_erp_main
+        ports:
+        - 5432:5432
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+        - 6379:6379
+        options: --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    # Cache dependensi untuk mempercepat build
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Download Go modules
+      run: go mod download
+
+    - name: Run linter
+      uses: golangci/golangci-lint-action@v8
+      with:
+        version: v2.1
+
+    - name: Run unit tests
+      # Menjalankan test yang ditandai sebagai 'short' dan tidak memerlukan dependensi eksternal.
+      run: go test -v -short ./...
+      env:
+        # Env vars di sini hanya untuk memastikan test tidak error, tapi tidak akan digunakan.
+        POSTGRES_HOST: localhost
+        POSTGRES_PORT: 5432
+
+    - name: Run integration tests
+      # Menjalankan semua test, termasuk yang berinteraksi dengan DB.
+      run: go test -v -race ./...
+      env:
+        # Env vars untuk menghubungkan test ke service container di atas
+        POSTGRES_USER: prismuser
+        POSTGRES_PASSWORD: prismpassword
+        POSTGRES_HOST: localhost
+        POSTGRES_PORT: 5432
+        REDIS_ADDR: localhost:6379
+        JWT_SECRET_KEY: "dummy-secret-for-ci"
+        # Variabel lain yang mungkin diperlukan
+        VAULT_ADDR: "http://dummy-vault:8200"
+        VAULT_TOKEN: "dummy-token"
+
+    - name: Build the application
+      run: go build -v -o ./app ./main.go
+
+    - name: Build Docker image
+      # Memastikan Dockerfile valid dan bisa membangun image.
+      run: docker build . -t lumina-enterprise-solutions/prism-auth-service:${{ github.sha }}

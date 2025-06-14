@@ -1,0 +1,15 @@
+# File: .github/CODEOWNERS
+# Pemilik kode akan otomatis diminta review saat ada PR yang mengubah file yang cocok.
+
+# Tim Core bertanggung jawab atas logika bisnis utama dari layanan ini.
+*       @Lumina-Enterprise-Solutions/Core-Team
+
+# Tim Platform bertanggung jawab atas infrastruktur, build, dan keamanan.
+# Mereka harus mereview perubahan pada Dockerfile, Makefile, dan konfigurasi CI.
+Dockerfile   @Lumina-Enterprise-Solutions/Platform-Team
+Makefile     @Lumina-Enterprise-Solutions/Platform-Team
+.github/     @Lumina-Enterprise-Solutions/Platform-Team @Lumina-Enterprise-Solutions/Architecture-Team
+
+# Perubahan pada file dependensi harus direview oleh Tim Arsitektur.
+go.mod      @Lumina-Enterprise-Solutions/Architecture-Team
+go.sum      @Lumina-Enterprise-Solutions/Architecture-Team

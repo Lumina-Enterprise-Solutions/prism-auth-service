@@ -1,0 +1,32 @@
+# Konfigurasi Dependabot untuk prism-auth-service
+
+version: 2
+updates:
+# Menjaga GitHub Actions tetap mutakhir
+- package-ecosystem: "github-actions"
+  directory: "/"
+  schedule:
+    interval: "weekly"
+    day: "monday"
+  commit-message:
+    prefix: "chore(actions)"
+  labels:
+  - "dependabot"
+  - "ci-cd"
+
+# Menjaga dependensi Go (Go Modules) tetap mutakhir
+- package-ecosystem: "gomod"
+  directory: "/" # Lokasi go.mod ada di root repositori ini
+  schedule:
+    interval: "weekly"
+    day: "monday"
+  commit-message:
+    prefix: "chore(deps)"
+  labels:
+  - "dependabot"
+  - "dependencies"
+  - "go"
+  # Grupkan semua pembaruan dependensi Go ke dalam satu PR
+  groups:
+    go-dependencies:
+      patterns: [ "*" ]
