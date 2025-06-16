@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"strconv"
 
@@ -11,9 +13,8 @@ import (
 	authredis "github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/redis"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/repository"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/service"
-	commonjwt "github.com/Lumina-Enterprise-Solutions/prism-common-libs/auth"
+	commonauth "github.com/Lumina-Enterprise-Solutions/prism-common-libs/auth"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/client"
-	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/ginutil"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/telemetry"
 	"github.com/gin-contrib/pprof"
 	"github.com/gin-gonic/gin"
@@ -22,15 +23,17 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
 
-// Fungsi helper untuk mengambil rahasia dari Vault dan set sebagai env var
-func loadSecretsFromVault() {
+// setupDependencies memuat konfigurasi dan rahasia, lalu menginisialisasi semua dependensi.
+func setupDependencies(cfg *authconfig.Config) (*pgxpool.Pool, error) {
+	// 1. Muat rahasia dari Vault ke environment variables
 	vaultClient, err := client.NewVaultClient()
 	if err != nil {
-		log.Fatalf("Gagal membuat klien Vault: %v", err)
+		return nil, fmt.Errorf("gagal membuat klien Vault: %w", err)
 	}
 
 	secretPath := "secret/data/prism"
 	requiredSecrets := []string{
+		"database_url",
 		"jwt_secret",
 		"google_oauth_client_id",
 		"google_oauth_client_secret",
@@ -39,57 +42,60 @@ func loadSecretsFromVault() {
 	}
 
 	if err := vaultClient.LoadSecretsToEnv(secretPath, requiredSecrets...); err != nil {
-		log.Fatalf("Gagal memuat rahasia-rahasia penting dari Vault: %v", err)
+		return nil, fmt.Errorf("gagal memuat rahasia-rahasia penting dari Vault: %w", err)
 	}
+
+	// 2. Inisialisasi koneksi Database menggunakan rahasia yang sudah dimuat
+	dbpool, err := pgxpool.New(context.Background(), os.Getenv("DATABASE_URL"))
+	if err != nil {
+		return nil, fmt.Errorf("gagal membuat connection pool: %w", err)
+	}
+	return dbpool, nil
 }
 
 func main() {
-	log.Println("Starting Prism Auth Service...")
-
-	loadSecretsFromVault()
-	authredis.InitRedisClient()
-
+	// 1. Muat konfigurasi dasar dari Consul
 	cfg := authconfig.Load()
-	log.Printf("Konfigurasi dimuat: Port=%d, Jaeger=%s", cfg.Port, cfg.JaegerEndpoint)
+	log.Printf("Konfigurasi dimuat: ServiceName=%s, Port=%d, Jaeger=%s", cfg.ServiceName, cfg.Port, cfg.JaegerEndpoint)
 
-	serviceName := "prism-auth-service"
-	jaegerEndpoint := os.Getenv("JAEGER_ENDPOINT")
-	if jaegerEndpoint == "" {
-		jaegerEndpoint = cfg.JaegerEndpoint
-	}
-	tp, err := telemetry.InitTracerProvider(serviceName, jaegerEndpoint)
+	// 2. Inisialisasi tracer
+	tp, err := telemetry.InitTracerProvider(cfg.ServiceName, cfg.JaegerEndpoint)
 	if err != nil {
-		log.Fatalf("Failed to initialize OTel tracer provider: %v", err)
+		log.Fatalf("Gagal menginisialisasi OTel tracer provider: %v", err)
 	}
 	defer func() {
 		if err := tp.Shutdown(context.Background()); err != nil {
-			log.Printf("Error shutting down tracer provider: %v", err)
+			log.Printf("Error saat mematikan tracer provider: %v", err)
 		}
 	}()
-	databaseUrl := os.Getenv("DATABASE_URL")
-	if databaseUrl == "" {
-		log.Fatal("DATABASE_URL environment variable is not set")
-	}
-	dbpool, err := pgxpool.New(context.Background(), databaseUrl)
+
+	// 3. Inisialisasi dependensi lain (DB, dll)
+	dbpool, err := setupDependencies(cfg)
 	if err != nil {
-		log.Fatalf("Unable to create connection pool: %v\n", err)
+		log.Fatalf("Gagal menginisialisasi dependensi: %v", err)
 	}
 	defer dbpool.Close()
+
+	// Inisialisasi Redis (sudah menggunakan env var yang dimuat dari Consul)
+	authredis.InitRedisClient()
+
+	// 4. Injeksi dependensi (Repositories, Services, Handlers)
 	userRepo := repository.NewPostgresUserRepository(dbpool)
 	authSvc := service.NewAuthService(userRepo)
 	authHandler := handler.NewAuthHandler(authSvc)
 	portStr := strconv.Itoa(cfg.Port)
 
-	log.Printf("Service configured to run on port %s", portStr)
-
+	// 5. Setup Gin Router & Middleware
 	router := gin.Default()
-	router.Use(otelgin.Middleware(serviceName))
+	router.Use(otelgin.Middleware(cfg.ServiceName))
 	p := ginprometheus.NewPrometheus("gin")
 	p.Use(router)
 	pprof.Register(router)
 
+	// 6. Setup Rute
 	authRoutes := router.Group("/auth")
 	{
+		authRoutes.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "healthy"}) })
 		authRoutes.POST("/register", authHandler.Register)
 		authRoutes.POST("/login", authHandler.Login)
 		authRoutes.POST("/refresh", authHandler.Refresh)
@@ -100,7 +106,7 @@ func main() {
 		authRoutes.POST("/login/2fa", authHandler.LoginWith2FA)
 
 		protected := authRoutes.Group("/")
-		protected.Use(commonjwt.JWTMiddleware())
+		protected.Use(commonauth.JWTMiddleware())
 		{
 			protected.GET("/profile", authHandler.Profile)
 			protected.POST("/logout", authHandler.Logout)
@@ -109,10 +115,21 @@ func main() {
 		}
 	}
 
-	ginutil.SetupHealthRoutesForGroup(authRoutes, "prism-auth-service", "1.0.0")
+	// 7. Daftarkan service ke Consul
+	consulClient, err := client.RegisterService(client.ServiceRegistrationInfo{
+		ServiceName:    cfg.ServiceName,
+		ServiceID:      fmt.Sprintf("%s-%s", cfg.ServiceName, portStr),
+		Port:           cfg.Port,
+		HealthCheckURL: fmt.Sprintf("http://%s:%s/auth/health", cfg.ServiceName, portStr),
+	})
+	if err != nil {
+		log.Fatalf("Gagal mendaftarkan service ke Consul: %v", err)
+	}
+	defer client.DeregisterService(consulClient, fmt.Sprintf("%s-%s", cfg.ServiceName, portStr))
 
-	log.Printf("Starting %s on port %s", cfg.ServiceName, portStr)
+	// 8. Jalankan Server
+	log.Printf("Memulai %s di port %s", cfg.ServiceName, portStr)
 	if err := router.Run(":" + portStr); err != nil {
-		log.Fatalf("Failed to run server: %v", err)
+		log.Fatalf("Gagal menjalankan server: %v", err)
 	}
 }
