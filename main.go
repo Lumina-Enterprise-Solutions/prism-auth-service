@@ -24,45 +24,23 @@ import (
 
 // Fungsi helper untuk mengambil rahasia dari Vault dan set sebagai env var
 func loadSecretsFromVault() {
-	client, err := client.NewVaultClient()
+	vaultClient, err := client.NewVaultClient()
 	if err != nil {
 		log.Fatalf("Gagal membuat klien Vault: %v", err)
 	}
 
 	secretPath := "secret/data/prism"
-
-	googleClientID, err := client.ReadSecret(secretPath, "google_oauth_client_id")
-	if err != nil {
-		log.Fatalf("Gagal membaca google_oauth_client_id dari Vault: %v", err)
-	}
-	googleClientSecret, err := client.ReadSecret(secretPath, "google_oauth_client_secret")
-	if err != nil {
-		log.Fatalf("Gagal membaca google_oauth_client_secret dari Vault: %v", err)
-	}
-	// PERBAIKAN: Tambahkan nolint directive untuk memuaskan errcheck
-	os.Setenv("GOOGLE_OAUTH_CLIENT_ID", googleClientID)         //nolint:errcheck
-	os.Setenv("GOOGLE_OAUTH_CLIENT_SECRET", googleClientSecret) //nolint:errcheck
-	log.Println("Berhasil memuat kredensial Google OAuth dari Vault.")
-
-	microsoftClientID, err := client.ReadSecret(secretPath, "microsoft_oauth_client_id")
-	if err != nil {
-		log.Fatalf("Gagal membaca microsoft_oauth_client_id dari Vault: %v", err)
-	}
-	microsoftClientSecret, err := client.ReadSecret(secretPath, "microsoft_oauth_client_secret")
-	if err != nil {
-		log.Fatalf("Gagal membaca microsoft_oauth_client_secret dari Vault: %v", err)
-	}
-	os.Setenv("MICROSOFT_OAUTH_CLIENT_ID", microsoftClientID)         //nolint:errcheck
-	os.Setenv("MICROSOFT_OAUTH_CLIENT_SECRET", microsoftClientSecret) //nolint:errcheck
-	log.Println("Berhasil memuat kredensial Microsoft OAuth dari Vault.")
-
-	jwtSecret, err := client.ReadSecret(secretPath, "jwt_secret")
-	if err != nil {
-		log.Fatalf("Gagal membaca jwt_secret dari Vault: %v. Pastikan rahasia sudah dimasukkan.", err)
+	requiredSecrets := []string{
+		"jwt_secret",
+		"google_oauth_client_id",
+		"google_oauth_client_secret",
+		"microsoft_oauth_client_id",
+		"microsoft_oauth_client_secret",
 	}
 
-	os.Setenv("JWT_SECRET_KEY", jwtSecret) //nolint:errcheck
-	log.Println("Berhasil memuat JWT_SECRET_KEY dari Vault.")
+	if err := vaultClient.LoadSecretsToEnv(secretPath, requiredSecrets...); err != nil {
+		log.Fatalf("Gagal memuat rahasia-rahasia penting dari Vault: %v", err)
+	}
 }
 
 func main() {
