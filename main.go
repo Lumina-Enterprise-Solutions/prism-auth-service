@@ -20,6 +20,7 @@ import (
 	"github.com/gin-contrib/pprof"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
+	redis_client "github.com/redis/go-redis/v9"
 	ginprometheus "github.com/zsais/go-gin-prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
@@ -75,6 +76,13 @@ func main() {
 	}
 	defer dbpool.Close()
 
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "cache-redis:6379"
+	}
+	redisClient := redis_client.NewClient(&redis_client.Options{Addr: redisAddr})
+	defer redisClient.Close()
+
 	redis.InitRedisClient()
 
 	// --- INJEKSI DEPENDENSI BARU ---
@@ -112,7 +120,7 @@ func main() {
 		authRoutes.POST("/login/2fa", authHandler.LoginWith2FA)
 
 		protected := authRoutes.Group("/")
-		protected.Use(commonauth.JWTMiddleware())
+		protected.Use(commonauth.JWTMiddleware(redisClient))
 		{
 			protected.GET("/profile", authHandler.Profile)
 			protected.POST("/logout", authHandler.Logout)
