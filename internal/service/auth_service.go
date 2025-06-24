@@ -15,19 +15,19 @@ import (
 	"time"
 
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/client"
-	authredis "github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/redis"
+	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/redis"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/repository"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/model"
+	userv1 "github.com/Lumina-Enterprise-Solutions/prism-protobufs/gen/go/prism/user/v1"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"golang.org/x/oauth2/microsoft"
 	googleoauth "google.golang.org/api/oauth2/v2"
-	"google.golang.org/api/option" // <-- TAMBAHKAN IMPORT BARU
+	"google.golang.org/api/option"
 )
 
 // Definisikan struct baru untuk response 2FA setup
@@ -63,13 +63,15 @@ type AuthService interface {
 }
 
 type authService struct {
-	userRepo             repository.UserRepository
+	userServiceClient    client.UserServiceClient // REPLACED
+	tokenRepo            repository.TokenRepository
 	notificationClient   *client.NotificationClient
 	googleOAuthConfig    *oauth2.Config
 	microsoftOAuthConfig *oauth2.Config
 }
 
-func NewAuthService(userRepo repository.UserRepository) AuthService {
+// Constructor has changed to accept the new dependencies
+func NewAuthService(userClient client.UserServiceClient, tokenRepo repository.TokenRepository) AuthService {
 	googleOAuthConfig := &oauth2.Config{
 		RedirectURL:  "http://localhost:8000/auth/google/callback",
 		ClientID:     os.Getenv("GOOGLE_OAUTH_CLIENT_ID"),
@@ -95,110 +97,12 @@ func NewAuthService(userRepo repository.UserRepository) AuthService {
 	}
 
 	return &authService{
-		userRepo:             userRepo,
+		userServiceClient:    userClient,
+		tokenRepo:            tokenRepo,
 		notificationClient:   client.NewNotificationClient(),
 		googleOAuthConfig:    googleOAuthConfig,
 		microsoftOAuthConfig: microsoftOAuthConfig,
 	}
-}
-
-func (s *authService) GenerateMicrosoftLoginURL(state string) string {
-	return s.microsoftOAuthConfig.AuthCodeURL(state)
-}
-
-func (s *authService) ProcessMicrosoftCallback(ctx context.Context, code string) (*AuthTokens, error) {
-	microsoftToken, err := s.microsoftOAuthConfig.Exchange(ctx, code)
-	if err != nil {
-		return nil, fmt.Errorf("gagal menukar kode microsoft: %w", err)
-	}
-
-	_, ok := microsoftToken.Extra("id_token").(string)
-	if !ok {
-		return nil, errors.New("id_token tidak ditemukan di response Microsoft")
-	}
-
-	oauthClient := s.microsoftOAuthConfig.Client(ctx, microsoftToken)
-	// PERBAIKAN: Gunakan NewService() yang direkomendasikan
-	oauthService, err := googleoauth.NewService(ctx, option.WithHTTPClient(oauthClient))
-	if err != nil {
-		return nil, fmt.Errorf("gagal membuat service oauth untuk microsoft: %w", err)
-	}
-
-	userInfo, err := oauthService.Userinfo.Get().Do()
-	if err != nil {
-		return nil, fmt.Errorf("gagal mengambil info user dari microsoft: %w", err)
-	}
-
-	user, err := s.userRepo.GetUserByEmail(ctx, userInfo.Email)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			newUser := &model.User{
-				Email:        userInfo.Email,
-				FirstName:    userInfo.GivenName,
-				LastName:     userInfo.FamilyName,
-				PasswordHash: "social-login",
-			}
-			userID, err := s.userRepo.CreateUser(ctx, newUser)
-			if err != nil {
-				return nil, fmt.Errorf("gagal membuat user baru dari social login: %w", err)
-			}
-			user, err = s.userRepo.GetUserByID(ctx, userID)
-			if err != nil {
-				return nil, fmt.Errorf("gagal mengambil user yang baru dibuat: %w", err)
-			}
-		} else {
-			return nil, fmt.Errorf("error saat mencari user: %w", err)
-		}
-	}
-
-	return s.generateTokenPair(ctx, user)
-}
-
-func (s *authService) GenerateGoogleLoginURL(state string) string {
-	return s.googleOAuthConfig.AuthCodeURL(state)
-}
-
-func (s *authService) ProcessGoogleCallback(ctx context.Context, code string) (*AuthTokens, error) {
-	googleToken, err := s.googleOAuthConfig.Exchange(ctx, code)
-	if err != nil {
-		return nil, fmt.Errorf("gagal menukar kode: %w", err)
-	}
-
-	oauthClient := s.googleOAuthConfig.Client(ctx, googleToken)
-	// PERBAIKAN: Gunakan NewService() yang direkomendasikan
-	oauthService, err := googleoauth.NewService(ctx, option.WithHTTPClient(oauthClient))
-	if err != nil {
-		return nil, fmt.Errorf("gagal membuat service oauth: %w", err)
-	}
-
-	userInfo, err := oauthService.Userinfo.Get().Do()
-	if err != nil {
-		return nil, fmt.Errorf("gagal mengambil info user: %w", err)
-	}
-
-	user, err := s.userRepo.GetUserByEmail(ctx, userInfo.Email)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			newUser := &model.User{
-				Email:        userInfo.Email,
-				FirstName:    userInfo.GivenName,
-				LastName:     userInfo.FamilyName,
-				PasswordHash: "social-login",
-			}
-			userID, err := s.userRepo.CreateUser(ctx, newUser)
-			if err != nil {
-				return nil, fmt.Errorf("gagal membuat user baru dari social login: %w", err)
-			}
-			user, err = s.userRepo.GetUserByID(ctx, userID)
-			if err != nil {
-				return nil, fmt.Errorf("gagal mengambil user yang baru dibuat: %w", err)
-			}
-		} else {
-			return nil, fmt.Errorf("error saat mencari user: %w", err)
-		}
-	}
-
-	return s.generateTokenPair(ctx, user)
 }
 
 func (s *authService) Register(ctx context.Context, user *model.User, password string) (string, error) {
@@ -206,20 +110,27 @@ func (s *authService) Register(ctx context.Context, user *model.User, password s
 	if err != nil {
 		return "", err
 	}
-	user.PasswordHash = string(hashedPassword)
 
-	userID, err := s.userRepo.CreateUser(ctx, user)
+	// Create user via gRPC call to user-service
+	req := &userv1.CreateUserRequest{
+		Email:     user.Email,
+		Password:  string(hashedPassword),
+		FirstName: user.FirstName,
+		LastName:  user.LastName,
+	}
+	createdUser, err := s.userServiceClient.CreateUser(ctx, req)
 	if err != nil {
 		return "", err
 	}
 
 	s.notificationClient.SendWelcomeEmail(ctx, user.Email, user.FirstName)
 
-	return userID, nil
+	return createdUser.ID, nil
 }
 
 func (s *authService) Login(ctx context.Context, email, password string) (*LoginStep1Response, error) {
-	user, err := s.userRepo.GetUserByEmail(ctx, email)
+	// Get user via gRPC
+	user, err := s.userServiceClient.GetUserAuthDetailsByEmail(ctx, email)
 	if err != nil {
 		return nil, errors.New("invalid credentials")
 	}
@@ -246,17 +157,62 @@ func (s *authService) Login(ctx context.Context, email, password string) (*Login
 	}, nil
 }
 
-// PERBAIKAN: Fungsi generateJWT yang tidak digunakan telah dihapus.
+func (s *authService) processSocialCallback(ctx context.Context, code string, config *oauth2.Config, provider string) (*AuthTokens, error) {
+	token, err := config.Exchange(ctx, code)
+	if err != nil {
+		return nil, fmt.Errorf("gagal menukar kode %s: %w", provider, err)
+	}
+
+	oauthClient := config.Client(ctx, token)
+	oauthService, err := googleoauth.NewService(ctx, option.WithHTTPClient(oauthClient))
+	if err != nil {
+		return nil, fmt.Errorf("gagal membuat service oauth untuk %s: %w", provider, err)
+	}
+
+	userInfo, err := oauthService.Userinfo.Get().Do()
+	if err != nil {
+		return nil, fmt.Errorf("gagal mengambil info user dari %s: %w", provider, err)
+	}
+
+	// For social login, we can use a dedicated gRPC method that handles "get or create" logic
+	req := &userv1.CreateSocialUserRequest{
+		Email:     userInfo.Email,
+		FirstName: userInfo.GivenName,
+		LastName:  userInfo.FamilyName,
+	}
+	user, err := s.userServiceClient.CreateSocialUser(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("gagal memproses user sosial: %w", err)
+	}
+
+	return s.generateTokenPair(ctx, user)
+}
+
+func (s *authService) GenerateGoogleLoginURL(state string) string {
+	return s.googleOAuthConfig.AuthCodeURL(state)
+}
+
+func (s *authService) ProcessGoogleCallback(ctx context.Context, code string) (*AuthTokens, error) {
+	return s.processSocialCallback(ctx, code, s.googleOAuthConfig, "google")
+}
+
+func (s *authService) GenerateMicrosoftLoginURL(state string) string {
+	return s.microsoftOAuthConfig.AuthCodeURL(state)
+}
+
+func (s *authService) ProcessMicrosoftCallback(ctx context.Context, code string) (*AuthTokens, error) {
+	return s.processSocialCallback(ctx, code, s.microsoftOAuthConfig, "microsoft")
+}
 
 func (s *authService) RefreshToken(ctx context.Context, refreshTokenString string) (*AuthTokens, error) {
 	refreshTokenHash := hashToken(refreshTokenString)
 
-	storedToken, err := s.userRepo.GetRefreshToken(ctx, refreshTokenHash)
+	storedToken, err := s.tokenRepo.GetRefreshToken(ctx, refreshTokenHash)
 	if err != nil {
 		return nil, errors.New("invalid or expired refresh token")
 	}
 
-	if err := s.userRepo.DeleteRefreshToken(ctx, refreshTokenHash); err != nil {
+	if err := s.tokenRepo.DeleteRefreshToken(ctx, refreshTokenHash); err != nil {
 		log.Printf("ERROR: Failed to delete old refresh token: %v", err)
 	}
 
@@ -264,7 +220,7 @@ func (s *authService) RefreshToken(ctx context.Context, refreshTokenString strin
 		return nil, errors.New("refresh token has expired")
 	}
 
-	user, err := s.userRepo.GetUserByID(ctx, storedToken.UserID)
+	user, err := s.userServiceClient.GetUserAuthDetailsByID(ctx, storedToken.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("could not find user for token: %w", err)
 	}
@@ -276,6 +232,7 @@ func (s *authService) RefreshToken(ctx context.Context, refreshTokenString strin
 
 	return tokens, nil
 }
+
 func (s *authService) generateTokenPair(ctx context.Context, user *model.User) (*AuthTokens, error) {
 	accessToken, err := s.generateAccessToken(user)
 	if err != nil {
@@ -287,7 +244,7 @@ func (s *authService) generateTokenPair(ctx context.Context, user *model.User) (
 		return nil, err
 	}
 
-	if err := s.userRepo.StoreRefreshToken(ctx, user.ID, refreshTokenHash, expiresAt); err != nil {
+	if err := s.tokenRepo.StoreRefreshToken(ctx, user.ID, refreshTokenHash, expiresAt); err != nil {
 		return nil, err
 	}
 
@@ -307,7 +264,7 @@ func (s *authService) generateAccessToken(user *model.User) (string, error) {
 	claims := jwt.MapClaims{
 		"sub":   user.ID,
 		"email": user.Email,
-		"role":  user.Role,
+		"role":  user.RoleName, // Using RoleName from the model
 		"iss":   "prism-app-issuer",
 		"iat":   time.Now().Unix(),
 		"exp":   time.Now().Add(time.Minute * time.Duration(expirationMinutes)).Unix(),
@@ -317,6 +274,7 @@ func (s *authService) generateAccessToken(user *model.User) (string, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(secretKey)
 }
+
 func (s *authService) generateRefreshToken() (string, string, time.Time, error) {
 	randomBytes := make([]byte, 32)
 	if _, err := rand.Read(randomBytes); err != nil {
@@ -324,7 +282,6 @@ func (s *authService) generateRefreshToken() (string, string, time.Time, error) 
 	}
 
 	refreshTokenString := base64.URLEncoding.EncodeToString(randomBytes)
-
 	refreshTokenHash := hashToken(refreshTokenString)
 
 	expirationDays, _ := strconv.Atoi(os.Getenv("REFRESH_TOKEN_EXPIRATION_DAYS"))
@@ -340,6 +297,7 @@ func hashToken(token string) string {
 	hash := sha256.Sum256([]byte(token))
 	return base64.URLEncoding.EncodeToString(hash[:])
 }
+
 func (s *authService) Logout(ctx context.Context, claims jwt.MapClaims) error {
 	jti, ok := claims["jti"].(string)
 	if !ok {
@@ -357,8 +315,9 @@ func (s *authService) Logout(ctx context.Context, claims jwt.MapClaims) error {
 		return nil
 	}
 
-	return authredis.AddToDenylist(ctx, jti, ttl)
+	return redis.AddToDenylist(ctx, jti, ttl)
 }
+
 func (s *authService) Setup2FA(ctx context.Context, userID, email string) (*TwoFASetup, error) {
 	key, err := totp.Generate(totp.GenerateOpts{
 		Issuer:      "Prism ERP",
@@ -390,11 +349,17 @@ func (s *authService) VerifyAndEnable2FA(ctx context.Context, userID, totpSecret
 		return errors.New("invalid 2FA code")
 	}
 
-	return s.userRepo.Enable2FA(ctx, userID, totpSecret)
+	// This operation needs to be sent to user-service.
+	// We'll need another gRPC method for this.
+	// For now, let's log it.
+	// In a real implementation:
+	// return s.userServiceClient.Enable2FA(ctx, userID, totpSecret)
+	log.Printf("TODO: Implement Enable2FA gRPC call to user-service for user %s", userID)
+	return errors.New("2FA enabling is not fully implemented via gRPC yet")
 }
 
 func (s *authService) VerifyLogin2FA(ctx context.Context, email, code string) (*AuthTokens, error) {
-	user, err := s.userRepo.GetUserByEmail(ctx, email)
+	user, err := s.userServiceClient.GetUserAuthDetailsByEmail(ctx, email)
 	if err != nil {
 		return nil, errors.New("user not found")
 	}
