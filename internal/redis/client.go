@@ -2,7 +2,6 @@ package redis
 
 import (
 	"context"
-	"os"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -14,23 +13,8 @@ var (
 )
 
 // InitRedisClient menginisialisasi koneksi ke Redis.
-func InitRedisClient() {
-	redisAddr := os.Getenv("REDIS_ADDR")
-	if redisAddr == "" {
-		redisAddr = "cache-redis:6379" // Nama service dan port di docker-compose
-	}
-
-	redisClient = redis.NewClient(&redis.Options{
-		Addr: redisAddr,
-	})
-
-	// Lakukan ping untuk memastikan koneksi berhasil
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if _, err := redisClient.Ping(ctx).Result(); err != nil {
-		panic("Gagal terhubung ke Redis: " + err.Error())
-	}
+func InitRedisClient(client *redis.Client) {
+	redisClient = client
 }
 
 // AddToDenylist menambahkan JTI token ke daftar hitam dengan TTL.

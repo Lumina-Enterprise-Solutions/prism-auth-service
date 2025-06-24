@@ -83,7 +83,7 @@ func main() {
 	redisClient := redis_client.NewClient(&redis_client.Options{Addr: redisAddr})
 	defer redisClient.Close()
 
-	redis.InitRedisClient()
+	redis.InitRedisClient(redisClient)
 
 	// --- INJEKSI DEPENDENSI BARU ---
 	// Buat gRPC client ke user-service
