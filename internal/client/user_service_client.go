@@ -107,6 +107,7 @@ func (c *grpcUserServiceClient) CreateSocialUser(ctx context.Context, req *userv
 	}
 	return mapResponseToModel(res), nil
 }
+
 func (c *grpcUserServiceClient) Enable2FA(ctx context.Context, userID, totpSecret string) error {
 	req := &userv1.Enable2FARequest{
 		UserId:     userID,
