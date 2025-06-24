@@ -25,18 +25,17 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
 
-// setupDependencies sekarang hanya menginisialisasi DB untuk refresh token.
-func setupDependencies() (*pgxpool.Pool, error) {
-	// 1. Muat rahasia dari Vault ke environment variables
-	vaultClient, err := client.NewVaultClient()
+func setupDependencies(cfg *authconfig.Config) (*pgxpool.Pool, error) {
+	// 1. Inisialisasi VaultClient menggunakan konfigurasi yang disuntikkan
+	vaultClient, err := client.NewVaultClient(cfg.VaultAddr, cfg.VaultToken)
 	if err != nil {
 		return nil, fmt.Errorf("gagal membuat klien Vault: %w", err)
 	}
 
+	// 2. Muat rahasia dari Vault ke environment variables (logika ini tetap sama)
 	secretPath := "secret/data/prism"
-	// Rahasia yang dibutuhkan auth-service kini lebih sedikit
 	requiredSecrets := []string{
-		"database_url", // Masih butuh DB untuk refresh_tokens
+		"database_url",
 		"jwt_secret_key",
 		"google_oauth_client_id",
 		"google_oauth_client_secret",
@@ -48,7 +47,7 @@ func setupDependencies() (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("gagal memuat rahasia-rahasia penting dari Vault: %w", err)
 	}
 
-	// 2. Inisialisasi koneksi Database untuk token
+	// 3. Inisialisasi koneksi Database
 	dbpool, err := pgxpool.New(context.Background(), os.Getenv("DATABASE_URL"))
 	if err != nil {
 		return nil, fmt.Errorf("gagal membuat connection pool: %w", err)
@@ -70,9 +69,9 @@ func main() {
 		}
 	}()
 
-	dbpool, err := setupDependencies()
+	dbpool, err := setupDependencies(cfg)
 	if err != nil {
-		log.Fatalf("Gagal menginisialisasi dependensi DB: %v", err)
+		log.Fatalf("Gagal menginisialisasi dependensi: %v", err)
 	}
 	defer dbpool.Close()
 
@@ -92,12 +91,10 @@ func main() {
 
 	defer userServiceClient.Close()
 
-
 	tokenRepo := repository.NewPostgresTokenRepository(dbpool)
 	authSvc := service.NewAuthService(userServiceClient, tokenRepo) // Service diinisialisasi dengan client, bukan repo user
 	authHandler := handler.NewAuthHandler(authSvc)
 	portStr := strconv.Itoa(cfg.Port)
-
 
 	router := gin.Default()
 	router.Use(otelgin.Middleware(cfg.ServiceName))
