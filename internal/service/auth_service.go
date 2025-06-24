@@ -349,13 +349,8 @@ func (s *authService) VerifyAndEnable2FA(ctx context.Context, userID, totpSecret
 		return errors.New("invalid 2FA code")
 	}
 
-	// This operation needs to be sent to user-service.
-	// We'll need another gRPC method for this.
-	// For now, let's log it.
-	// In a real implementation:
-	// return s.userServiceClient.Enable2FA(ctx, userID, totpSecret)
-	log.Printf("TODO: Implement Enable2FA gRPC call to user-service for user %s", userID)
-	return errors.New("2FA enabling is not fully implemented via gRPC yet")
+	// PERBAIKAN: Ganti TODO dengan panggilan gRPC yang sebenarnya.
+	return s.userServiceClient.Enable2FA(ctx, userID, totpSecret)
 }
 
 func (s *authService) VerifyLogin2FA(ctx context.Context, email, code string) (*AuthTokens, error) {
