@@ -85,21 +85,19 @@ func main() {
 
 	redis.InitRedisClient(redisClient)
 
-	// --- INJEKSI DEPENDENSI BARU ---
-	// Buat gRPC client ke user-service
 	userServiceClient, err := authclient.NewUserServiceClient("user-service:9001") // Target: nama service & port gRPC
 	if err != nil {
 		log.Fatalf("Gagal membuat user service client: %v", err)
 	}
-	// PERBAIKAN: Gunakan metode Close dari interface
+
 	defer userServiceClient.Close()
 
-	// Buat repo hanya untuk token
+
 	tokenRepo := repository.NewPostgresTokenRepository(dbpool)
 	authSvc := service.NewAuthService(userServiceClient, tokenRepo) // Service diinisialisasi dengan client, bukan repo user
 	authHandler := handler.NewAuthHandler(authSvc)
 	portStr := strconv.Itoa(cfg.Port)
-	// --- AKHIR INJEKSI DEPENDENSI BARU ---
+
 
 	router := gin.Default()
 	router.Use(otelgin.Middleware(cfg.ServiceName))

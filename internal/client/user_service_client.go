@@ -24,7 +24,8 @@ type UserServiceClient interface {
 	GetUserAuthDetailsByID(ctx context.Context, id string) (*model.User, error)
 	CreateUser(ctx context.Context, req *userv1.CreateUserRequest) (*model.User, error)
 	CreateSocialUser(ctx context.Context, req *userv1.CreateSocialUserRequest) (*model.User, error)
-	Close() // Menambahkan metode Close ke interface
+	Enable2FA(ctx context.Context, userID, totpSecret string) error
+	Close()
 }
 
 type grpcUserServiceClient struct {
@@ -105,4 +106,12 @@ func (c *grpcUserServiceClient) CreateSocialUser(ctx context.Context, req *userv
 		return nil, err
 	}
 	return mapResponseToModel(res), nil
+}
+func (c *grpcUserServiceClient) Enable2FA(ctx context.Context, userID, totpSecret string) error {
+	req := &userv1.Enable2FARequest{
+		UserId:     userID,
+		TotpSecret: totpSecret,
+	}
+	_, err := c.client.Enable2FA(ctx, req)
+	return err
 }
