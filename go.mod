@@ -3,7 +3,7 @@ module github.com/Lumina-Enterprise-Solutions/prism-auth-service
 go 1.24.3
 
 require (
-	github.com/Lumina-Enterprise-Solutions/prism-common-libs v1.2.4
+	github.com/Lumina-Enterprise-Solutions/prism-common-libs v1.2.5
 	github.com/Lumina-Enterprise-Solutions/prism-protobufs v0.0.5
 	github.com/gin-contrib/pprof v1.5.3
 	github.com/gin-gonic/gin v1.10.1
@@ -12,6 +12,7 @@ require (
 	github.com/jackc/pgx/v5 v5.7.5
 	github.com/pquerna/otp v1.5.0
 	github.com/redis/go-redis/v9 v9.10.0
+	github.com/rs/zerolog v1.34.0
 	github.com/zsais/go-gin-prometheus v0.1.0
 	go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin v0.61.0
 	golang.org/x/crypto v0.39.0

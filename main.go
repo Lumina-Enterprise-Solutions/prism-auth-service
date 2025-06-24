@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -16,11 +15,13 @@ import (
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/service"
 	commonauth "github.com/Lumina-Enterprise-Solutions/prism-common-libs/auth"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/client"
+	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/logger"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/telemetry"
 	"github.com/gin-contrib/pprof"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	redis_client "github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/log"
 	ginprometheus "github.com/zsais/go-gin-prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
@@ -56,22 +57,27 @@ func setupDependencies(cfg *authconfig.Config) (*pgxpool.Pool, error) {
 }
 
 func main() {
+	logger.Init()
 	cfg := authconfig.Load()
-	log.Printf("Konfigurasi dimuat: ServiceName=%s, Port=%d, Jaeger=%s", cfg.ServiceName, cfg.Port, cfg.JaegerEndpoint)
+	log.Info().
+		Str("service", cfg.ServiceName).
+		Int("port", cfg.Port).
+		Str("jaeger_endpoint", cfg.JaegerEndpoint).
+		Msg("Configuration loaded")
 
 	tp, err := telemetry.InitTracerProvider(cfg.ServiceName, cfg.JaegerEndpoint)
 	if err != nil {
-		log.Fatalf("Gagal menginisialisasi OTel tracer provider: %v", err)
+		log.Fatal().Err(err).Msg("Failed to initialize OTel tracer provider")
 	}
 	defer func() {
 		if err := tp.Shutdown(context.Background()); err != nil {
-			log.Printf("Error saat mematikan tracer provider: %v", err)
+			log.Error().Err(err).Msg("Error saat mematikan tracer provider")
 		}
 	}()
 
 	dbpool, err := setupDependencies(cfg)
 	if err != nil {
-		log.Fatalf("Gagal menginisialisasi dependensi: %v", err)
+		log.Fatal().Err(err).Msg("Gagal menginisialisasi dependensi")
 	}
 	defer dbpool.Close()
 
@@ -86,7 +92,7 @@ func main() {
 
 	userServiceClient, err := authclient.NewUserServiceClient("user-service:9001") // Target: nama service & port gRPC
 	if err != nil {
-		log.Fatalf("Gagal membuat user service client: %v", err)
+		log.Fatal().Err(err).Msg("Gagal membuat user service client")
 	}
 
 	defer userServiceClient.Close()
@@ -131,12 +137,16 @@ func main() {
 		HealthCheckURL: fmt.Sprintf("http://prism-auth-service:%s/auth/health", portStr),
 	})
 	if err != nil {
-		log.Fatalf("Gagal mendaftarkan service ke Consul: %v", err)
+		log.Fatal().Err(err).Msg("Gagal mendaftarkan service ke Consul: %v")
 	}
 	defer client.DeregisterService(consulClient, fmt.Sprintf("%s-%s", cfg.ServiceName, portStr))
 
-	log.Printf("Memulai %s di port %s", cfg.ServiceName, portStr)
+	log.Info().
+		Str("service", cfg.ServiceName).
+		Str("port", portStr).
+		Msg("Memulai service")
+
 	if err := router.Run(":" + portStr); err != nil {
-		log.Fatalf("Gagal menjalankan server: %v", err)
+		log.Fatal().Err(err).Msg("Gagal menjalankan server: %v")
 	}
 }
