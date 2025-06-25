@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/client"
@@ -63,11 +64,16 @@ type AuthService interface {
 	VerifyLogin2FA(ctx context.Context, email, code string) (*AuthTokens, error)
 	ForgotPassword(ctx context.Context, email string) error
 	ResetPassword(ctx context.Context, token, newPassword string) error
+	CreateAPIKey(ctx context.Context, userID, description string) (string, error)
+	GetAPIKeys(ctx context.Context, userID string) ([]model.APIKeyMetadata, error)
+	RevokeAPIKey(ctx context.Context, userID, keyID string) error
+	ValidateAPIKey(ctx context.Context, apiKeyString string) (*model.User, error)
 }
 
 type authService struct {
 	userServiceClient    client.UserServiceClient // REPLACED
 	tokenRepo            repository.TokenRepository
+	apiKeyRepo           repository.APIKeyRepository
 	passwordResetRepo    repository.PasswordResetRepository
 	notificationClient   *client.NotificationClient
 	googleOAuthConfig    *oauth2.Config
@@ -75,7 +81,7 @@ type authService struct {
 }
 
 // Constructor has changed to accept the new dependencies
-func NewAuthService(userClient client.UserServiceClient, tokenRepo repository.TokenRepository) AuthService {
+func NewAuthService(userClient client.UserServiceClient, tokenRepo repository.TokenRepository, apiKeyRepo repository.APIKeyRepository) AuthService {
 	googleOAuthConfig := &oauth2.Config{
 		RedirectURL:  "http://localhost:8000/auth/google/callback",
 		ClientID:     os.Getenv("GOOGLE_OAUTH_CLIENT_ID"),
@@ -103,6 +109,7 @@ func NewAuthService(userClient client.UserServiceClient, tokenRepo repository.To
 	return &authService{
 		userServiceClient:    userClient,
 		tokenRepo:            tokenRepo,
+		apiKeyRepo:           apiKeyRepo, // REPLACED
 		notificationClient:   client.NewNotificationClient(),
 		googleOAuthConfig:    googleOAuthConfig,
 		microsoftOAuthConfig: microsoftOAuthConfig,
@@ -414,4 +421,60 @@ func (s *authService) ResetPassword(ctx context.Context, token, newPassword stri
 	}
 
 	return s.userServiceClient.UpdatePassword(ctx, userID, string(newPasswordHash))
+}
+func (s *authService) CreateAPIKey(ctx context.Context, userID, description string) (string, error) {
+    prefixBytes := make([]byte, 4) // 4 bytes -> 8 karakter hex
+    if _, err := rand.Read(prefixBytes); err != nil { return "", err }
+    prefix := hex.EncodeToString(prefixBytes)
+
+    secretBytes := make([]byte, 24) // 24 bytes -> 32 karakter base64
+    if _, err := rand.Read(secretBytes); err != nil { return "", err }
+    secretPart := base64.RawURLEncoding.EncodeToString(secretBytes)
+
+    apiKeyString := "pk_" + prefix + "_" + secretPart // prism_key_...
+    keyHash := hashToken(apiKeyString)
+
+    _, err := s.apiKeyRepo.StoreKey(ctx, userID, keyHash, "pk_"+prefix, description, nil) // expiresAt = NULL
+    if err != nil {
+        return "", err
+    }
+
+    return apiKeyString, nil
+}
+
+// GetAPIKeys mengambil metadata semua key milik seorang user.
+func (s *authService) GetAPIKeys(ctx context.Context, userID string) ([]model.APIKeyMetadata, error) {
+    return s.apiKeyRepo.GetKeysForUser(ctx, userID)
+}
+
+// RevokeAPIKey menonaktifkan sebuah API key.
+func (s *authService) RevokeAPIKey(ctx context.Context, userID, keyID string) error {
+    return s.apiKeyRepo.RevokeKey(ctx, userID, keyID)
+}
+
+// ValidateAPIKey memeriksa apakah sebuah API key valid dan mengembalikan data user.
+func (s *authService) ValidateAPIKey(ctx context.Context, apiKeyString string) (*model.User, error) {
+    parts := strings.Split(apiKeyString, "_")
+    if len(parts) != 3 || parts[0] != "pk" {
+        return nil, errors.New("invalid api key format")
+    }
+    prefix := parts[0] + "_" + parts[1]
+
+    userWithHash, err := s.apiKeyRepo.GetUserByKeyPrefix(ctx, prefix)
+    if err != nil {
+        return nil, errors.New("api key not found, expired, or revoked")
+    }
+
+    requestKeyHash := hashToken(apiKeyString)
+    if requestKeyHash != userWithHash.KeyHash {
+        return nil, errors.New("invalid api key")
+    }
+
+    if userWithHash.Status != "active" {
+         return nil, fmt.Errorf("user account is %s", userWithHash.Status)
+    }
+
+    // TODO: Update last_used_at secara asinkron
+
+    return &userWithHash.User, nil
 }

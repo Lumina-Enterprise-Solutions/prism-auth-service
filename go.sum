@@ -5,8 +5,8 @@ cloud.google.com/go/auth/oauth2adapt v0.2.8/go.mod h1:XQ9y31RkqZCcwJWNSx2Xvric3R
 cloud.google.com/go/compute/metadata v0.7.0 h1:PBWF+iiAerVNe8UCHxdOt6eHLVc3ydFeOCw78U8ytSU=
 cloud.google.com/go/compute/metadata v0.7.0/go.mod h1:j5MvL9PprKL39t166CoB1uVHfQMs4tFQZZcKwksXUjo=
 github.com/DataDog/datadog-go v3.2.0+incompatible/go.mod h1:LButxg5PwREeZtORoXG3tL4fMGNddJ+vMq1mwgfaqoQ=
-github.com/Lumina-Enterprise-Solutions/prism-common-libs v1.2.5 h1:cqcEkyAR8CDlDn23To1ALNjUBkpyIUVGxD0ukfj/gKA=
-github.com/Lumina-Enterprise-Solutions/prism-common-libs v1.2.5/go.mod h1:eEwMVCslAJrFipZYsIE4DFMzNAd9qxo64Lg7qiC1bDs=
+github.com/Lumina-Enterprise-Solutions/prism-common-libs v1.2.7 h1:AwtGFMkfFacoeMJ2Mp/jH0jW7GYGxADAf2adSloQhC4=
+github.com/Lumina-Enterprise-Solutions/prism-common-libs v1.2.7/go.mod h1:eEwMVCslAJrFipZYsIE4DFMzNAd9qxo64Lg7qiC1bDs=
 github.com/Lumina-Enterprise-Solutions/prism-protobufs v0.0.7 h1:RAY/s6XrcYOJ3wdIG3Detx2Nc72e8G/qi+4KLJdg2cg=
 github.com/Lumina-Enterprise-Solutions/prism-protobufs v0.0.7/go.mod h1:yLQd4SSVCyz0dYHr39W3ujONZ+dQAnOYQwPU6BIVxpg=
 github.com/alecthomas/template v0.0.0-20160405071501-a0175ee3bccc/go.mod h1:LOuyumcjzFXgccqObfd/Ljyb9UuFJ6TxHnclSeseNhc=

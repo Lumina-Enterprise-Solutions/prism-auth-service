@@ -3,7 +3,7 @@ module github.com/Lumina-Enterprise-Solutions/prism-auth-service
 go 1.24.3
 
 require (
-	github.com/Lumina-Enterprise-Solutions/prism-common-libs v1.2.5
+	github.com/Lumina-Enterprise-Solutions/prism-common-libs v1.2.7
 	github.com/Lumina-Enterprise-Solutions/prism-protobufs v0.0.7
 	github.com/gin-contrib/pprof v1.5.3
 	github.com/gin-gonic/gin v1.10.1
