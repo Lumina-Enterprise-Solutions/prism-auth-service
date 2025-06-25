@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
+	"time"
 
 	authconfig "github.com/Lumina-Enterprise-Solutions/prism-auth-service/config"
 	authclient "github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/client"
@@ -95,13 +99,14 @@ func main() {
 		log.Fatal().Err(err).Msg("Gagal membuat user service client")
 	}
 
+	// PENTING: Defer penutupan koneksi gRPC
 	defer userServiceClient.Close()
 
 	tokenRepo := repository.NewPostgresTokenRepository(dbpool)
-	authSvc := service.NewAuthService(userServiceClient, tokenRepo) // Service diinisialisasi dengan client, bukan repo user
+	authSvc := service.NewAuthService(userServiceClient, tokenRepo)
 	authHandler := handler.NewAuthHandler(authSvc)
-	portStr := strconv.Itoa(cfg.Port)
 
+	portStr := strconv.Itoa(cfg.Port)
 	router := gin.Default()
 	router.Use(otelgin.Middleware(cfg.ServiceName))
 	p := ginprometheus.NewPrometheus("gin")
@@ -149,4 +154,34 @@ func main() {
 	if err := router.Run(":" + portStr); err != nil {
 		log.Fatal().Err(err).Msg("Gagal menjalankan server: %v")
 	}
+	// === Tahap 2: Jalankan Server & Tangani Shutdown ===
+	srv := &http.Server{
+		Addr:    ":" + portStr,
+		Handler: router,
+	}
+
+	// Jalankan server HTTP di goroutine
+	go func() {
+		log.Info().Str("service", cfg.ServiceName).Msgf("HTTP server listening on %s", srv.Addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal().Err(err).Msg("HTTP server ListenAndServe error")
+		}
+	}()
+
+	// Tunggu sinyal shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Info().Msg("Shutdown signal received, starting graceful shutdown...")
+
+	// Buat context dengan timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Shutdown server HTTP
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatal().Err(err).Msg("Server forced to shutdown")
+	}
+
+	log.Info().Msg("Server exiting gracefully.")
 }
