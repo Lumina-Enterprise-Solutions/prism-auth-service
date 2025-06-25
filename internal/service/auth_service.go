@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"image/png"
@@ -60,11 +61,14 @@ type AuthService interface {
 	VerifyAndEnable2FA(ctx context.Context, userID, totpSecret, code string) error
 	Login(ctx context.Context, email, password string) (*LoginStep1Response, error)
 	VerifyLogin2FA(ctx context.Context, email, code string) (*AuthTokens, error)
+	ForgotPassword(ctx context.Context, email string) error
+	ResetPassword(ctx context.Context, token, newPassword string) error
 }
 
 type authService struct {
 	userServiceClient    client.UserServiceClient // REPLACED
 	tokenRepo            repository.TokenRepository
+	passwordResetRepo    repository.PasswordResetRepository
 	notificationClient   *client.NotificationClient
 	googleOAuthConfig    *oauth2.Config
 	microsoftOAuthConfig *oauth2.Config
@@ -365,4 +369,49 @@ func (s *authService) VerifyLogin2FA(ctx context.Context, email, code string) (*
 	}
 
 	return s.generateTokenPair(ctx, user)
+}
+func (s *authService) ForgotPassword(ctx context.Context, email string) error {
+	user, err := s.userServiceClient.GetUserAuthDetailsByEmail(ctx, email)
+	if err != nil {
+		// Jangan beri tahu jika email tidak ada untuk mencegah enumerasi user
+		log.Printf("Password reset requested for non-existent email: %s", email)
+		return nil
+	}
+
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return err
+	}
+	token := hex.EncodeToString(tokenBytes)
+
+	tokenHash := hashToken(token) // Gunakan fungsi hash yang sama dengan refresh token
+	expiresAt := time.Now().Add(1 * time.Hour)
+
+	if err := s.passwordResetRepo.StoreToken(ctx, tokenHash, user.ID, expiresAt); err != nil {
+		return err
+	}
+
+	// Kirim email (secara asinkron)
+	resetLink := fmt.Sprintf("https://app.prismerp.com/reset-password?token=%s", token)
+	s.notificationClient.SendPasswordResetEmail(ctx, user.Email, user.FirstName, resetLink) // Buat metode baru ini
+
+	return nil
+}
+
+func (s *authService) ResetPassword(ctx context.Context, token, newPassword string) error {
+	tokenHash := hashToken(token)
+	userID, err := s.passwordResetRepo.GetUserIDByToken(ctx, tokenHash)
+	if err != nil {
+		return errors.New("invalid or expired token")
+	}
+
+	// Hapus token setelah digunakan
+	defer s.passwordResetRepo.DeleteToken(context.Background(), tokenHash)
+
+	newPasswordHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+
+	return s.userServiceClient.UpdatePassword(ctx, userID, string(newPasswordHash))
 }

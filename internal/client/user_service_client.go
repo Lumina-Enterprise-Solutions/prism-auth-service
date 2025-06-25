@@ -25,6 +25,7 @@ type UserServiceClient interface {
 	CreateUser(ctx context.Context, req *userv1.CreateUserRequest) (*model.User, error)
 	CreateSocialUser(ctx context.Context, req *userv1.CreateSocialUserRequest) (*model.User, error)
 	Enable2FA(ctx context.Context, userID, totpSecret string) error
+	UpdatePassword(ctx context.Context, userID, newPasswordHash string) error
 	Close()
 }
 
@@ -114,5 +115,13 @@ func (c *grpcUserServiceClient) Enable2FA(ctx context.Context, userID, totpSecre
 		TotpSecret: totpSecret,
 	}
 	_, err := c.client.Enable2FA(ctx, req)
+	return err
+}
+func (c *grpcUserServiceClient) UpdatePassword(ctx context.Context, userID, newPasswordHash string) error {
+	req := &userv1.UpdatePasswordRequest{
+		UserId:          userID,
+		NewPasswordHash: newPasswordHash,
+	}
+	_, err := c.client.UpdatePassword(ctx, req)
 	return err
 }
