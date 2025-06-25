@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,6 +14,7 @@ import (
 
 	authconfig "github.com/Lumina-Enterprise-Solutions/prism-auth-service/config"
 	authclient "github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/client"
+	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/grpc_server"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/handler"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/middleware"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/redis"
@@ -21,6 +23,7 @@ import (
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/client"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/logger"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/telemetry"
+	authv1 "github.com/Lumina-Enterprise-Solutions/prism-protobufs/gen/go/prism/auth/v1"
 	"github.com/gin-contrib/pprof"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -28,6 +31,7 @@ import (
 	"github.com/rs/zerolog/log"
 	ginprometheus "github.com/zsais/go-gin-prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+	"google.golang.org/grpc"
 )
 
 func setupDependencies(cfg *authconfig.Config) (*pgxpool.Pool, error) {
@@ -167,6 +171,22 @@ func main() {
 			}
 		}
 	}
+
+	grpcPort := 9002 // Port internal untuk gRPC auth-service
+	lis, err := net.Listen("tcp", ":"+strconv.Itoa(grpcPort))
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to listen on gRPC port")
+	}
+	s := grpc.NewServer()
+	authServer := grpc_server.NewAuthServer(authSvc)
+	authv1.RegisterAuthServiceServer(s, authServer)
+
+	go func() {
+		log.Info().Int("port", grpcPort).Msg("gRPC server started")
+		if err := s.Serve(lis); err != nil {
+			log.Fatal().Err(err).Msg("gRPC server failed to serve")
+		}
+	}()
 
 	// === Tahap 4: Jalankan Server & Tangani Graceful Shutdown ===
 	srv := &http.Server{

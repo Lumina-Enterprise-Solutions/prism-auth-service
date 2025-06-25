@@ -69,6 +69,7 @@ type AuthService interface {
 	GetAPIKeys(ctx context.Context, userID string) ([]model.APIKeyMetadata, error)
 	RevokeAPIKey(ctx context.Context, userID, keyID string) error
 	ValidateAPIKey(ctx context.Context, apiKeyString string) (*model.User, error)
+	GenerateImpersonationToken(ctx context.Context, targetUser *model.User, actorID string) (string, time.Time, error)
 }
 
 type authService struct {
@@ -484,4 +485,35 @@ func (s *authService) ValidateAPIKey(ctx context.Context, apiKeyString string) (
 	// TODO: Update last_used_at secara asinkron
 
 	return &userWithHash.User, nil
+}
+func (s *authService) GenerateImpersonationToken(ctx context.Context, targetUser *model.User, actorID string) (string, time.Time, error) {
+	if targetUser == nil || targetUser.ID == "" {
+		return "", time.Time{}, errors.New("target user for impersonation cannot be nil or have an empty ID")
+	}
+	if actorID == "" {
+		return "", time.Time{}, errors.New("actor ID for impersonation cannot be empty")
+	}
+
+	expirationTime := time.Now().Add(1 * time.Hour) // Sesi impersonasi singkat
+	secretKey := []byte(os.Getenv("JWT_SECRET_KEY"))
+
+	claims := jwt.MapClaims{
+		"sub":          targetUser.ID,
+		"email":        targetUser.Email,
+		"role":         targetUser.RoleName,
+		"iss":          "prism-app-issuer",
+		"iat":          time.Now().Unix(),
+		"exp":          expirationTime.Unix(),
+		"jti":          uuid.NewString(),
+		"act":          actorID, // Klaim 'actor' standar JWT
+		"impersonated": true,    // Klaim kustom untuk menandai token ini
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signedToken, err := token.SignedString(secretKey)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+
+	return signedToken, expirationTime, nil
 }
