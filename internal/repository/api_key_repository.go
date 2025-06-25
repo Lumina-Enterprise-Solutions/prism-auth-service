@@ -41,7 +41,7 @@ func (r *postgresAPIKeyRepository) StoreKey(ctx context.Context, userID, keyHash
 // Mengambil data user lengkap berdasarkan prefix key.
 func (r *postgresAPIKeyRepository) GetUserByKeyPrefix(ctx context.Context, prefix string) (*UserWithKeyHash, error) {
 	var result UserWithKeyHash
-	// Query ini menggabungkan tabel users dan api_keys
+	// Query ini TIDAK berubah, karena kita memang mencari berdasarkan prefix.
 	sql := `
         SELECT
             u.id, u.email, r.name as role_name, u.status,

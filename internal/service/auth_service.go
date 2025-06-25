@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -423,58 +424,64 @@ func (s *authService) ResetPassword(ctx context.Context, token, newPassword stri
 	return s.userServiceClient.UpdatePassword(ctx, userID, string(newPasswordHash))
 }
 func (s *authService) CreateAPIKey(ctx context.Context, userID, description string) (string, error) {
-    prefixBytes := make([]byte, 4) // 4 bytes -> 8 karakter hex
-    if _, err := rand.Read(prefixBytes); err != nil { return "", err }
-    prefix := hex.EncodeToString(prefixBytes)
+	// Format: [Prefix]_[Secret]
+	// Prefix akan disimpan di DB, Secret hanya ada di string lengkapnya.
+	prefix := "zpk" // Zetta Prism Key
 
-    secretBytes := make([]byte, 24) // 24 bytes -> 32 karakter base64
-    if _, err := rand.Read(secretBytes); err != nil { return "", err }
-    secretPart := base64.RawURLEncoding.EncodeToString(secretBytes)
+	// Buat bagian rahasia yang panjang
+	secretBytes := make([]byte, 32) // 32 bytes -> ~43 karakter base64
+	if _, err := rand.Read(secretBytes); err != nil {
+		return "", err
+	}
+	secretPart := base64.RawURLEncoding.EncodeToString(secretBytes)
 
-    apiKeyString := "pk_" + prefix + "_" + secretPart // prism_key_...
-    keyHash := hashToken(apiKeyString)
+	apiKeyString := prefix + "_" + secretPart
+	keyHash := hashToken(apiKeyString)
 
-    _, err := s.apiKeyRepo.StoreKey(ctx, userID, keyHash, "pk_"+prefix, description, nil) // expiresAt = NULL
-    if err != nil {
-        return "", err
-    }
+	// Simpan hash dan prefix ke database
+	_, err := s.apiKeyRepo.StoreKey(ctx, userID, keyHash, prefix, description, nil)
+	if err != nil {
+		return "", err
+	}
 
-    return apiKeyString, nil
+	return apiKeyString, nil
 }
 
 // GetAPIKeys mengambil metadata semua key milik seorang user.
 func (s *authService) GetAPIKeys(ctx context.Context, userID string) ([]model.APIKeyMetadata, error) {
-    return s.apiKeyRepo.GetKeysForUser(ctx, userID)
+	return s.apiKeyRepo.GetKeysForUser(ctx, userID)
 }
 
 // RevokeAPIKey menonaktifkan sebuah API key.
 func (s *authService) RevokeAPIKey(ctx context.Context, userID, keyID string) error {
-    return s.apiKeyRepo.RevokeKey(ctx, userID, keyID)
+	return s.apiKeyRepo.RevokeKey(ctx, userID, keyID)
 }
 
-// ValidateAPIKey memeriksa apakah sebuah API key valid dan mengembalikan data user.
 func (s *authService) ValidateAPIKey(ctx context.Context, apiKeyString string) (*model.User, error) {
-    parts := strings.Split(apiKeyString, "_")
-    if len(parts) != 3 || parts[0] != "pk" {
-        return nil, errors.New("invalid api key format")
-    }
-    prefix := parts[0] + "_" + parts[1]
+	parts := strings.Split(apiKeyString, "_")
+	// Key harus memiliki setidaknya 2 bagian: prefix dan secret
+	if len(parts) < 2 {
+		return nil, errors.New("invalid api key format")
+	}
+	prefix := parts[0]
 
-    userWithHash, err := s.apiKeyRepo.GetUserByKeyPrefix(ctx, prefix)
-    if err != nil {
-        return nil, errors.New("api key not found, expired, or revoked")
-    }
+	// Cari user dan hash key yang cocok berdasarkan prefix
+	userWithHash, err := s.apiKeyRepo.GetUserByKeyPrefix(ctx, prefix)
+	if err != nil {
+		return nil, errors.New("api key not found, expired, or revoked")
+	}
 
-    requestKeyHash := hashToken(apiKeyString)
-    if requestKeyHash != userWithHash.KeyHash {
-        return nil, errors.New("invalid api key")
-    }
+	// Lakukan perbandingan hash dengan waktu konstan untuk keamanan
+	requestKeyHash := hashToken(apiKeyString)
+	if subtle.ConstantTimeCompare([]byte(requestKeyHash), []byte(userWithHash.KeyHash)) != 1 {
+		return nil, errors.New("invalid api key")
+	}
 
-    if userWithHash.Status != "active" {
-         return nil, fmt.Errorf("user account is %s", userWithHash.Status)
-    }
+	if userWithHash.Status != "active" {
+		return nil, fmt.Errorf("user account is %s", userWithHash.Status)
+	}
 
-    // TODO: Update last_used_at secara asinkron
+	// TODO: Update last_used_at secara asinkron
 
-    return &userWithHash.User, nil
+	return &userWithHash.User, nil
 }
