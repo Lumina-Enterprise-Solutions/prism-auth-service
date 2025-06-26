@@ -21,14 +21,18 @@ func NewAuthServer(svc service.AuthService) *AuthServer {
 }
 
 func (s *AuthServer) GenerateImpersonationToken(ctx context.Context, req *authv1.GenerateImpersonationTokenRequest) (*authv1.GenerateImpersonationTokenResponse, error) {
+	// Gunakan getter yang di-generate oleh protobuf untuk keamanan dari nil pointer.
 	if req.GetTargetUser() == nil {
 		return nil, status.Error(codes.InvalidArgument, "target_user is required")
 	}
 
+	protoUser := req.GetTargetUser()
+
+	// Mapping dari tipe protobuf (UserInfoForToken) ke tipe model internal (model.User)
 	targetUser := &model.User{
-		ID:       req.TargetUser.Id,
-		Email:    req.TargetUser.Email,
-		RoleName: req.TargetUser.RoleName,
+		ID:       protoUser.GetId(),
+		Email:    protoUser.GetEmail(),
+		RoleName: protoUser.GetRoleName(),
 	}
 
 	token, exp, err := s.authService.GenerateImpersonationToken(ctx, targetUser, req.GetActorId())

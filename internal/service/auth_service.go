@@ -73,17 +73,17 @@ type AuthService interface {
 }
 
 type authService struct {
-	userServiceClient    client.UserServiceClient // REPLACED
+	userServiceClient    client.UserServiceClient
 	tokenRepo            repository.TokenRepository
 	apiKeyRepo           repository.APIKeyRepository
 	passwordResetRepo    repository.PasswordResetRepository
-	notificationClient   *client.NotificationClient
+	notificationClient   client.NotificationClient
 	googleOAuthConfig    *oauth2.Config
 	microsoftOAuthConfig *oauth2.Config
 }
 
 // Constructor has changed to accept the new dependencies
-func NewAuthService(userClient client.UserServiceClient, tokenRepo repository.TokenRepository, apiKeyRepo repository.APIKeyRepository) AuthService {
+func NewAuthService(userClient client.UserServiceClient, tokenRepo repository.TokenRepository, apiKeyRepo repository.APIKeyRepository, passwordResetRepo repository.PasswordResetRepository) AuthService {
 	googleOAuthConfig := &oauth2.Config{
 		RedirectURL:  "http://localhost:8000/auth/google/callback",
 		ClientID:     os.Getenv("GOOGLE_OAUTH_CLIENT_ID"),
@@ -108,11 +108,14 @@ func NewAuthService(userClient client.UserServiceClient, tokenRepo repository.To
 		Endpoint: microsoft.AzureADEndpoint("common"),
 	}
 
+	// NewNotificationClient sekarang mengembalikan struct, bukan pointer.
+	// Jika tetap pointer, baris `notificationClient: client.NewNotificationClient()` juga valid
 	return &authService{
 		userServiceClient:    userClient,
 		tokenRepo:            tokenRepo,
-		apiKeyRepo:           apiKeyRepo, // REPLACED
-		notificationClient:   client.NewNotificationClient(),
+		apiKeyRepo:           apiKeyRepo,
+		passwordResetRepo:    passwordResetRepo,
+		notificationClient:   *client.NewNotificationClient(), // * di sini jika New... mengembalikan pointer
 		googleOAuthConfig:    googleOAuthConfig,
 		microsoftOAuthConfig: microsoftOAuthConfig,
 	}
@@ -136,7 +139,8 @@ func (s *authService) Register(ctx context.Context, user *model.User, password s
 		return "", err
 	}
 
-	s.notificationClient.SendWelcomeEmail(ctx, user.Email, user.FirstName)
+	// Panggil dengan argumen yang benar: userID, email, firstName
+	s.notificationClient.SendWelcomeEmail(ctx, createdUser.ID, user.Email, user.FirstName)
 
 	return createdUser.ID, nil
 }
@@ -382,7 +386,6 @@ func (s *authService) VerifyLogin2FA(ctx context.Context, email, code string) (*
 func (s *authService) ForgotPassword(ctx context.Context, email string) error {
 	user, err := s.userServiceClient.GetUserAuthDetailsByEmail(ctx, email)
 	if err != nil {
-		// Jangan beri tahu jika email tidak ada untuk mencegah enumerasi user
 		log.Printf("Password reset requested for non-existent email: %s", email)
 		return nil
 	}
@@ -402,7 +405,7 @@ func (s *authService) ForgotPassword(ctx context.Context, email string) error {
 
 	// Kirim email (secara asinkron)
 	resetLink := fmt.Sprintf("https://app.prismerp.com/reset-password?token=%s", token)
-	s.notificationClient.SendPasswordResetEmail(ctx, user.Email, user.FirstName, resetLink) // Buat metode baru ini
+	s.notificationClient.SendPasswordResetEmail(ctx, user.ID, user.Email, user.FirstName, resetLink)
 
 	return nil
 }
@@ -414,15 +417,24 @@ func (s *authService) ResetPassword(ctx context.Context, token, newPassword stri
 		return errors.New("invalid or expired token")
 	}
 
-	// Hapus token setelah digunakan
-	defer s.passwordResetRepo.DeleteToken(context.Background(), tokenHash)
-
 	newPasswordHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
 	if err != nil {
 		return err
 	}
 
-	return s.userServiceClient.UpdatePassword(ctx, userID, string(newPasswordHash))
+	// Update the user's password first.
+	if err := s.userServiceClient.UpdatePassword(ctx, userID, string(newPasswordHash)); err != nil {
+		return err // If password update fails, do NOT delete the token.
+	}
+
+	// SECURITY FIX: Only delete the token AFTER the password has been successfully updated.
+	// This makes the operation transactional and prevents the token from being burned on a failed attempt.
+	if err := s.passwordResetRepo.DeleteToken(ctx, tokenHash); err != nil {
+		// Log this error but don't fail the whole operation, as the user's password is now reset.
+		log.Printf("WARN: Failed to delete used password reset token, but password was reset. TokenHash: %s. Error: %v", tokenHash, err)
+	}
+
+	return nil
 }
 func (s *authService) CreateAPIKey(ctx context.Context, userID, description string) (string, error) {
 	// Format: [Prefix]_[Secret]

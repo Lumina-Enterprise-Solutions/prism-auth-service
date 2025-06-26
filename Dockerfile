@@ -34,6 +34,7 @@ WORKDIR /app
 # Salin binary aplikasi yang sudah di-build dari tahap 'builder'
 COPY --from=builder /app/main .
 
+
 # Definisikan service name untuk logging dan monitoring
 ENV SERVICE_NAME=prism-auth-service
 

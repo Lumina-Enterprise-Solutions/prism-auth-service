@@ -3,7 +3,7 @@ package handler
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"log" // <-- TAMBAHKAN
+	"log"
 	"net/http"
 
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/service"
@@ -59,7 +59,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		Password string `json:"password" binding:"required"`
 	}
 	var req LoginRequest
-	// PERBAIKAN: Isi blok if yang kosong
+	// FIX: Filled in empty if block
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -128,7 +128,7 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 }
 func (h *AuthHandler) GoogleLogin(c *gin.Context) {
 	stateBytes := make([]byte, 16)
-	// PERBAIKAN: Cek error dari rand.Read
+	// FIX: Check error from rand.Read
 	if _, err := rand.Read(stateBytes); err != nil {
 		log.Printf("ERROR: Failed to generate random state for OAuth: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to initiate Google login"})
@@ -160,7 +160,7 @@ func (h *AuthHandler) GoogleCallback(c *gin.Context) {
 }
 func (h *AuthHandler) MicrosoftLogin(c *gin.Context) {
 	stateBytes := make([]byte, 16)
-	// PERBAIKAN: Cek error dari rand.Read
+	// FIX: Check error from rand.Read
 	if _, err := rand.Read(stateBytes); err != nil {
 		log.Printf("ERROR: Failed to generate random state for OAuth: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to initiate Microsoft login"})
@@ -254,14 +254,16 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 	var req struct {
 		Email string `json:"email" binding:"required,email"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil { /* ... */
+	// FIX: Filled in empty if block
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 
 	if err := h.authService.ForgotPassword(c.Request.Context(), req.Email); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
 		return
 	}
-	// Selalu kembalikan response sukses untuk mencegah user enumeration
 	c.JSON(http.StatusOK, gin.H{"message": "If an account with that email exists, a password reset link has been sent."})
 }
 
@@ -270,7 +272,10 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 		Token       string `json:"token" binding:"required"`
 		NewPassword string `json:"new_password" binding:"required,min=8"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil { /* ... */
+	// FIX: Filled in empty if block
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 
 	if err := h.authService.ResetPassword(c.Request.Context(), req.Token, req.NewPassword); err != nil {

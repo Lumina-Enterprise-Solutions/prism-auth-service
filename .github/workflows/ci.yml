@@ -21,11 +21,11 @@ jobs:
     # Menentukan service yang dibutuhkan oleh job ini
     services:
       postgres:
-        image: postgres:15-alpine
+        image: postgres:17-alpine
         env:
           POSTGRES_USER: prismuser
           POSTGRES_PASSWORD: prismpassword
-          POSTGRES_DB: prism_erp_main
+          POSTGRES_DB: prism_erp
         ports:
         - 5432:5432
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
@@ -60,33 +60,32 @@ jobs:
     - name: Run linter
       uses: golangci/golangci-lint-action@v8
       with:
+        # Optional: version of golangci-lint to use in form of v1.2.3, defaults to latest if not specified
         version: v2.1
 
     - name: Run unit tests
       # Menjalankan test yang ditandai sebagai 'short' dan tidak memerlukan dependensi eksternal.
       run: go test -v -short ./...
-      env:
-        # Env vars di sini hanya untuk memastikan test tidak error, tapi tidak akan digunakan.
-        POSTGRES_HOST: localhost
-        POSTGRES_PORT: 5432
 
     - name: Run integration tests
-      # Menjalankan semua test, termasuk yang berinteraksi dengan DB.
-      run: go test -v -race ./...
+      # FIX: Jalankan script, bukan 'go test' secara langsung.
+      # Script ini mengatur env vars yang diperlukan agar TestMain dapat setup DB.
+      run: ./scripts/test-integration.sh
       env:
         # Env vars untuk menghubungkan test ke service container di atas
+        # Script akan menggunakan ini atau default values.
         POSTGRES_USER: prismuser
         POSTGRES_PASSWORD: prismpassword
         POSTGRES_HOST: localhost
-        POSTGRES_PORT: 5432
+        POSTGRES_PORT: 5432 # Portnya adalah host port, bukan container port
         REDIS_ADDR: localhost:6379
         JWT_SECRET_KEY: "dummy-secret-for-ci"
-        # Variabel lain yang mungkin diperlukan
-        VAULT_ADDR: "http://dummy-vault:8200"
+        VAULT_ADDR: "http://dummy-vault:8200" # Dummy values
         VAULT_TOKEN: "dummy-token"
 
     - name: Build the application
       run: go build -v -o ./app ./main.go
-    # - name: Build Docker image
-    #   # Memastikan Dockerfile valid dan bisa membangun image.
-    #   run: docker build . -t lumina-enterprise-solutions/prism-auth-service:${{ github.sha }}
+
+    - name: Build Docker image
+      # RE-ENABLED: Memastikan Dockerfile valid dan bisa membangun image.
+      run: docker build . --file Dockerfile -t lumina-enterprise-solutions/prism-auth-service:${{ github.sha }}

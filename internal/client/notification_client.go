@@ -5,8 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"io" // <-- TAMBAHKAN
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -28,9 +27,11 @@ func NewNotificationClient() *NotificationClient {
 }
 
 type NotificationPayload struct {
-	Recipient string `json:"recipient"`
-	Subject   string `json:"subject"`
-	Message   string `json:"message"`
+	RecipientID  string                 `json:"recipient_id"`
+	Recipient    string                 `json:"recipient"`
+	Subject      string                 `json:"subject"`
+	TemplateName string                 `json:"template_name"`
+	TemplateData map[string]interface{} `json:"template_data"`
 }
 
 func (c *NotificationClient) sendNotification(ctx context.Context, payload NotificationPayload) {
@@ -66,30 +67,28 @@ func (c *NotificationClient) sendNotification(ctx context.Context, payload Notif
 	}()
 }
 
-func (c *NotificationClient) SendWelcomeEmail(ctx context.Context, email, firstName string) {
+func (c *NotificationClient) SendWelcomeEmail(ctx context.Context, userID, email, firstName string) {
+	// FIX: The payload fields were incorrectly assigned. This maps them correctly.
 	payload := NotificationPayload{
-		Recipient: email,
-		Subject:   "Welcome to Prism ERP!",
-		Message:   fmt.Sprintf("<h1>Welcome, %s!</h1><p>Your account has been successfully created.</p>", firstName),
+		RecipientID:  userID,
+		Recipient:    email,
+		Subject:      "Welcome to Prism ERP!",
+		TemplateName: "welcome.html",
+		TemplateData: map[string]interface{}{"FirstName": firstName},
 	}
 	c.sendNotification(ctx, payload)
 }
 
-// --- METODE BARU ---
-func (c *NotificationClient) SendPasswordResetEmail(ctx context.Context, email, firstName, resetLink string) {
+func (c *NotificationClient) SendPasswordResetEmail(ctx context.Context, userID, email, firstName, resetLink string) {
 	payload := NotificationPayload{
-		Recipient: email,
-		Subject:   "Your Prism ERP Password Reset Request",
-		Message: fmt.Sprintf(
-			`<h1>Password Reset Request</h1>
-             <p>Hello %s,</p>
-             <p>We received a request to reset your password. Please click the link below to set a new password:</p>
-             <p><a href="%s">Reset Password</a></p>
-             <p>This link will expire in 1 hour. If you did not request a password reset, please ignore this email.</p>
-             <p>Thanks,<br>The Prism ERP Team</p>`,
-			firstName,
-			resetLink,
-		),
+		RecipientID:  userID,
+		Recipient:    email,
+		Subject:      "Your Prism ERP Password Reset Request",
+		TemplateName: "password_reset.html",
+		TemplateData: map[string]interface{}{
+			"FirstName": firstName,
+			"ResetLink": resetLink,
+		},
 	}
 	c.sendNotification(ctx, payload)
 }
