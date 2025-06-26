@@ -1,4 +1,3 @@
-// File: internal/repository/main_test.go
 package repository
 
 import (
@@ -17,56 +16,93 @@ var (
 	testDBPool *pgxpool.Pool
 )
 
+// FIX: Define the required database schema as a string.
+// This will be executed to ensure the database is ready for tests.
+const schemaSQL = `
+CREATE TABLE IF NOT EXISTS roles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(50) UNIQUE NOT NULL,
+    description TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255),
+    first_name VARCHAR(100),
+    last_name VARCHAR(100),
+    role_id UUID REFERENCES roles(id),
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    is_2fa_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    totp_secret TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    prefix VARCHAR(50) NOT NULL UNIQUE,
+    key_hash TEXT NOT NULL,
+    description TEXT,
+    expires_at TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ,
+    revoked_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);`
+
 // TestMain is the global setup for integration testing the repository package.
-// It runs once before all tests in this package.
 func TestMain(m *testing.M) {
-	// FIX: This is the definitive fix for the 'panic: testing: Short called before Parse'.
-	// We rely ONLY on the environment variable, which is explicitly set by our integration
-	// test script (`scripts/test-integration.sh`).
-	// When running `make test` (which executes `go test -short`), this variable is NOT set,
-	// so we correctly skip the database setup and avoid the panic.
 	if os.Getenv("RUN_INTEGRATION_TESTS") != "true" {
-		log.Println("Skipping repository integration tests (RUN_INTEGRATION_TESTS not set to 'true'). This is expected for 'make test'.")
-		// Exit immediately. No need to run the tests in this package as they all require a database.
+		log.Println("Skipping repository integration tests (RUN_INTEGRATION_TESTS not set to 'true').")
 		os.Exit(0)
 	}
 
 	log.Println("Setting up for repository integration tests...")
 
-	// Get database configuration from environment variables
 	dbUser := os.Getenv("POSTGRES_USER")
 	if dbUser == "" {
 		dbUser = "prismuser"
 	}
-
 	dbPassword := os.Getenv("POSTGRES_PASSWORD")
 	if dbPassword == "" {
 		dbPassword = "prismpassword"
 	}
-
 	dbHost := os.Getenv("POSTGRES_HOST")
 	if dbHost == "" {
 		dbHost = "localhost"
 	}
-
 	dbPort := os.Getenv("POSTGRES_PORT")
 	if dbPort == "" {
 		dbPort = "5432"
 	}
-
 	dbName := os.Getenv("POSTGRES_DB")
 	if dbName == "" {
 		dbName = "prism_erp"
 	}
 
-	// Construct the connection string for PostgreSQL
 	databaseURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
 		dbUser, dbPassword, dbHost, dbPort, dbName)
 
 	var err error
-	var attempts = 10 // Try to connect up to 10 times
-
-	// ================== RETRY LOOP FOR DATABASE CONNECTION ==================
+	var attempts = 10
 	for i := 0; i < attempts; i++ {
 		log.Printf("Connecting to test database (attempt %d/%d)...", i+1, attempts)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -86,21 +122,27 @@ func TestMain(m *testing.M) {
 		if i == attempts-1 {
 			log.Fatalf("FATAL: Could not connect to database after %d attempts: %v", attempts, err)
 		}
-
 		log.Printf("WARN: Database not ready, retrying in 2 seconds... (error: %v)", err)
 		time.Sleep(2 * time.Second)
 	}
 
 	if testDBPool == nil {
-		log.Fatal("FATAL: testDBPool is nil after setup. This should not happen.")
+		log.Fatal("FATAL: testDBPool is nil after setup.")
 	}
+
+	// FIX: Apply the schema to the test database
+	log.Println("Applying database schema for tests...")
+	_, err = testDBPool.Exec(context.Background(), schemaSQL)
+	if err != nil {
+		log.Fatalf("FATAL: Could not apply database schema: %v", err)
+	}
+	log.Println("SUCCESS: Database schema applied.")
 
 	log.Printf("Successfully connected to database: %s", dbName)
 
 	// Run all tests in this package
 	exitCode := m.Run()
 
-	// ================== CLEANUP AFTER ALL TESTS ARE DONE ==================
 	log.Println("Tearing down repository integration tests...")
 	if testDBPool != nil {
 		testDBPool.Close()
@@ -115,6 +157,7 @@ func truncateTables(ctx context.Context, t *testing.T, tables ...string) {
 	require.NotNil(t, testDBPool, "cannot truncate tables: testDBPool is nil")
 
 	for _, table := range tables {
+		// FIX: Use CASCADE to handle foreign key relationships correctly during truncation
 		query := fmt.Sprintf("TRUNCATE TABLE %s RESTART IDENTITY CASCADE", table)
 		_, err := testDBPool.Exec(ctx, query)
 		require.NoError(t, err, "Failed to truncate table %s", table)
