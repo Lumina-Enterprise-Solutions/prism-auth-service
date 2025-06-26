@@ -22,8 +22,9 @@ COPY . .
 # Meng-compile aplikasi.
 # -o /app/server: Output binary akan diberi nama 'server' dan diletakkan di /app
 # -ldflags="-w -s": Opsi untuk mengurangi ukuran binary. '-w' menghilangkan debug info DWARF, '-s' menghilangkan symbol table.
-# ./... : Pola ini akan mencari dan membangun dari direktori yang berisi main.go
-RUN go build -ldflags="-w -s" -o /app/server ./...
+# FIX: Ganti `./...` dengan `.` yang menunjuk ke package di direktori saat ini.
+# Go akan secara otomatis menemukan file main.go di direktori /app.
+RUN go build -ldflags="-w -s" -o /app/server .
 
 
 # --- Tahap 2: Final Image - Fokus pada image akhir yang ramping dan aman ---
