@@ -107,10 +107,13 @@ func TestAPIKeyRepository(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, keys, 2)
 		for _, key := range keys {
-			if key.ID == keyID1 {
-				assert.NotNil(t, key.RevokedAt)
-			} else if key.ID == keyID2 {
-				assert.Nil(t, key.RevokedAt)
+			switch key.ID {
+			case keyID1:
+				assert.NotNil(t, key.RevokedAt, "Key 1 should be revoked")
+			case keyID2:
+				assert.Nil(t, key.RevokedAt, "Key 2 should not be revoked")
+			default:
+				t.Fatalf("Found an unexpected key ID: %s", key.ID)
 			}
 		}
 	})

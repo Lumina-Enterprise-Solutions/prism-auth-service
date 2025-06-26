@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -61,6 +60,9 @@ func (m *MockAuthService) GetAPIKeys(ctx context.Context, userID string) ([]mode
 	return nil, nil
 }
 func (m *MockAuthService) RevokeAPIKey(ctx context.Context, userID, keyID string) error { return nil }
+func (m *MockAuthService) GenerateImpersonationToken(ctx context.Context, targetUser *model.User, actorID string) (string, time.Time, error) {
+	return "", time.Time{}, nil
+}
 func (m *MockAuthService) ValidateAPIKey(ctx context.Context, apiKeyString string) (*model.User, error) {
 	args := m.Called(ctx, apiKeyString)
 	if args.Get(0) == nil {
@@ -68,14 +70,10 @@ func (m *MockAuthService) ValidateAPIKey(ctx context.Context, apiKeyString strin
 	}
 	return args.Get(0).(*model.User), args.Error(1)
 }
-func (m *MockAuthService) GenerateImpersonationToken(ctx context.Context, targetUser *model.User, actorID string) (string, time.Time, error) {
-	return "", time.Time{}, nil
-}
 
 func TestFlexibleAuthMiddleware(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	os.Setenv("JWT_SECRET_KEY", "test-secret")
-	defer os.Unsetenv("JWT_SECRET_KEY")
+	t.Setenv("JWT_SECRET_KEY", "test-secret")
 
 	generateDummyJWT := func(jti string, secret string) string {
 		claims := jwt.MapClaims{"jti": jti, "sub": "user-123", "exp": time.Now().Add(time.Hour).Unix()}
@@ -140,8 +138,7 @@ func TestFlexibleAuthMiddleware(t *testing.T) {
 				req.Header.Set("Authorization", "Bearer invalidtoken")
 			},
 			expectedStatus: http.StatusUnauthorized,
-			// FIX: Use the correct error message returned from the common library's parser.
-			expectedBody: `{"error":"Invalid token","details":"token is malformed: token contains an invalid number of segments"}`,
+			expectedBody:   `{"error":"Invalid token","details":"token is malformed: token contains an invalid number of segments"}`,
 		},
 	}
 	for _, tc := range testCases {

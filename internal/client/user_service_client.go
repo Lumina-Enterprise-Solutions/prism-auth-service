@@ -49,7 +49,10 @@ func NewUserServiceClient(target string) (UserServiceClient, error) {
 // Close a gRPC connection
 func (c *grpcUserServiceClient) Close() {
 	if c.conn != nil {
-		c.conn.Close()
+		// LINT FIX: Check the error on close.
+		if err := c.conn.Close(); err != nil {
+			log.Printf("[WARN] Failed to close gRPC connection to user-service: %v", err)
+		}
 	}
 }
 

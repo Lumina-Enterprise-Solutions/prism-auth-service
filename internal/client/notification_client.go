@@ -17,8 +17,6 @@ type NotificationClient struct {
 }
 
 func NewNotificationClient() *NotificationClient {
-	// Di Docker Compose, service bisa saling menemukan via nama service-nya.
-	// URL ini menunjuk ke container 'notification-service' di port internalnya.
 	baseURL := "http://notification-service:8080"
 	return &NotificationClient{
 		httpClient: &http.Client{Timeout: 5 * time.Second},
@@ -35,7 +33,6 @@ type NotificationPayload struct {
 }
 
 func (c *NotificationClient) sendNotification(ctx context.Context, payload NotificationPayload) {
-	// Kita jalankan di goroutine agar tidak memblokir proses utama.
 	go func() {
 		body, err := json.Marshal(payload)
 		if err != nil {
@@ -43,7 +40,6 @@ func (c *NotificationClient) sendNotification(ctx context.Context, payload Notif
 			return
 		}
 
-		// Gunakan context.Background() untuk request yang siklus hidupnya independen
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, c.baseURL+"/notifications/send", bytes.NewBuffer(body))
 		if err != nil {
 			log.Printf("[ERROR] Failed to create background notification request: %v", err)
@@ -56,9 +52,14 @@ func (c *NotificationClient) sendNotification(ctx context.Context, payload Notif
 			log.Printf("[ERROR] Failed to send notification for subject '%s': %v", payload.Subject, err)
 			return
 		}
-		defer resp.Body.Close()
+		// LINT FIX: Check the error returned from closing the response body.
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				log.Printf("[WARN] Failed to close response body on notification request: %v", err)
+			}
+		}()
 
-		if resp.StatusCode != http.StatusAccepted { // <-- Periksa StatusAccepted (202)
+		if resp.StatusCode != http.StatusAccepted {
 			bodyBytes, _ := io.ReadAll(resp.Body)
 			log.Printf("[ERROR] Notification service returned non-202 status: %s, body: %s", resp.Status, string(bodyBytes))
 		} else {
