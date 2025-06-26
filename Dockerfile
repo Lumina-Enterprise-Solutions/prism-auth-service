@@ -1,42 +1,60 @@
-# services/prism-auth-service/Dockerfile
-
-# --- Tahap 1: Builder ---
-# Tahap ini fokus untuk meng-compile aplikasi Go kita.
+# Tahap 1: Builder - Fokus pada kompilasi kode Go
+# Menggunakan versi Go yang spesifik dan image Alpine untuk ukuran yang kecil
 FROM golang:1.24-alpine AS builder
 
+# Menetapkan CGO_ENABLED=0 untuk build statis, sangat disarankan untuk Docker
+ENV CGO_ENABLED=0
+
+# Menetapkan direktori kerja di dalam image
 WORKDIR /app
 
-# Salin file manajemen dependensi
-COPY go.work go.work.sum ./
-COPY common/prism-common-libs/go.mod ./common/prism-common-libs/
-COPY services/prism-auth-service/go.mod ./services/prism-auth-service/
-COPY services/prism-user-service/go.mod ./services/prism-user-service/
-COPY services/prism-notification-service/go.mod ./services/prism-notification-service/
-COPY services/prism-file-service/go.mod ./services/prism-file-service/
+# Menyalin file go.mod dan go.sum untuk men-cache layer dependensi
+# Tanda `.` di akhir berarti menyalin ke WORKDIR (/app)
+COPY go.mod go.sum ./
 
-# Download dependensi agar bisa di-cache
+# Mengunduh dependensi Go. Layer ini akan di-cache oleh Docker jika go.sum tidak berubah.
 RUN go mod download
 
-# Salin semua source code
+# Menyalin seluruh source code aplikasi ke dalam image
+# Perhatikan bahwa .dockerignore harus digunakan untuk mengecualikan file yang tidak perlu (seperti .git, .env)
 COPY . .
 
-# Build aplikasi spesifik untuk service ini
-# CGO_ENABLED=0 dan GOOS=linux adalah praktik terbaik untuk build lintas-platform yang statis
-RUN CGO_ENABLED=0 GOOS=linux go build -o /app/main ./services/prism-auth-service
+# Meng-compile aplikasi.
+# -o /app/server: Output binary akan diberi nama 'server' dan diletakkan di /app
+# -ldflags="-w -s": Opsi untuk mengurangi ukuran binary. '-w' menghilangkan debug info DWARF, '-s' menghilangkan symbol table.
+# ./... : Pola ini akan mencari dan membangun dari direktori yang berisi main.go
+RUN go build -ldflags="-w -s" -o /app/server ./...
 
 
-# --- Tahap 2: Final Image ---
-# Tahap ini membuat image akhir yang ramping yang akan kita jalankan.
+# --- Tahap 2: Final Image - Fokus pada image akhir yang ramping dan aman ---
+# Menggunakan image Alpine terbaru yang sangat kecil
 FROM alpine:latest
 
+# Menetapkan direktori kerja
 WORKDIR /app
 
-# Salin binary aplikasi yang sudah di-build dari tahap 'builder'
-COPY --from=builder /app/main .
+# PENTING: Menjalankan aplikasi sebagai non-root user untuk keamanan.
+# 1. Buat group 'appgroup'
+# 2. Buat user 'appuser' dan tambahkan ke 'appgroup'
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
+# Salin binary aplikasi yang sudah di-compile dari tahap 'builder'
+COPY --from=builder /app/server /app/server
 
-# Definisikan service name untuk logging dan monitoring
-ENV SERVICE_NAME=prism-auth-service
+# Label Standar OCI (Open Container Initiative) untuk metadata image
+LABEL org.opencontainers.image.source="https://github.com/Lumina-Enterprise-Solutions/prism-auth-service"
+LABEL org.opencontainers.image.title="PrismAuthService"
+LABEL org.opencontainers.image.description="Authentication and authorization service for the Prism ERP ecosystem."
 
-# Jalankan aplikasi secara langsung. Tidak ada lagi entrypoint script.
-CMD ["./main"]
+# Berikan kepemilikan direktori kerja kepada user baru kita
+RUN chown -R appuser:appgroup /app
+
+# Ganti user dari 'root' ke 'appuser'
+USER appuser
+
+# Expose port yang digunakan oleh aplikasi
+# (Ini lebih sebagai dokumentasi, tidak benar-benar membuka port di host)
+EXPOSE 8080
+
+# Perintah untuk menjalankan aplikasi ketika kontainer dimulai
+CMD ["/app/server"]

@@ -1,0 +1,34 @@
+# File: .dockerignore
+
+# Git
+.git
+.gitignore
+
+# Konfigurasi IDE dan editor
+.idea/
+.vscode/
+*.sublime-*
+
+# File environment lokal
+.env
+.env.*
+
+# Binari yang dihasilkan secara lokal (jika ada)
+server
+app
+*.exe
+*.test
+
+# File log dan output coverage
+*.log
+*.out
+coverage.out
+
+# Dokumentasi yang tidak perlu di dalam image
+README.md
+LICENSE
+
+# Konfigurasi Docker dan Make
+Dockerfile
+Makefile
+docker-compose.yml
