@@ -1,4 +1,4 @@
-// services/prism-auth-service/internal/middleware/auth_middleware.go
+// File: internal/middleware/auth_middleware.go
 package middleware
 
 import (
@@ -12,8 +12,8 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// FlexibleAuthMiddleware akan mencoba otentikasi via JWT, lalu fallback ke API Key.
 func FlexibleAuthMiddleware(authSvc service.AuthService, redisClient *redis.Client) gin.HandlerFunc {
+	// FIX: Suntikkan redisClient saat membuat JWTMiddleware.
 	jwtMiddleware := commonauth.JWTMiddleware(redisClient)
 
 	return func(c *gin.Context) {
@@ -21,7 +21,7 @@ func FlexibleAuthMiddleware(authSvc service.AuthService, redisClient *redis.Clie
 		apiKeyHeader := c.GetHeader("X-API-Key")
 
 		if strings.HasPrefix(authHeader, "Bearer ") {
-			jwtMiddleware(c) // Gunakan middleware JWT yang sudah ada
+			jwtMiddleware(c) // Gunakan middleware JWT yang sudah dikonfigurasi.
 			return
 		}
 
@@ -32,13 +32,12 @@ func FlexibleAuthMiddleware(authSvc service.AuthService, redisClient *redis.Clie
 				return
 			}
 
-			c.Set("user_id", user.ID)
-			c.Set("claims", jwt.MapClaims{"sub": user.ID, "email": user.Email, "role": user.RoleName})
+			c.Set(commonauth.UserIDKey, user.ID)
+			c.Set(commonauth.ClaimsKey, jwt.MapClaims{"sub": user.ID, "email": user.Email, "role": user.RoleName})
 			c.Next()
 			return
 		}
 
-		// Jika tidak ada header sama sekali
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Authorization header required (Bearer Token or X-API-Key)"})
 	}
 }

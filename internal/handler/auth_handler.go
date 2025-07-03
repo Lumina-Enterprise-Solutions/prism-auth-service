@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/service"
 	commonjwt "github.com/Lumina-Enterprise-Solutions/prism-common-libs/auth"
@@ -283,4 +284,30 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Password has been reset successfully."})
+}
+func (h *AuthHandler) RegisterWithInvitation(c *gin.Context) {
+	var req struct {
+		Token     string `json:"token" binding:"required"`
+		FirstName string `json:"first_name" binding:"required"`
+		LastName  string `json:"last_name" binding:"required"`
+		Password  string `json:"password" binding:"required,min=8"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	tokens, err := h.authService.RegisterWithInvitation(c.Request.Context(), req.Token, req.FirstName, req.LastName, req.Password)
+	if err != nil {
+		// Berikan pesan error yang lebih spesifik jika undangan tidak valid
+		if strings.Contains(err.Error(), "undangan tidak valid") {
+			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to register with invitation", "details": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, tokens)
 }
