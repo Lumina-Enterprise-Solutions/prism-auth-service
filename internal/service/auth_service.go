@@ -1,3 +1,4 @@
+// File: internal/service/auth_service.go
 package service
 
 import (
@@ -53,6 +54,7 @@ type AuthTokens struct {
 
 type AuthService interface {
 	Register(ctx context.Context, user *model.User, password string) (string, error)
+	RegisterWithInvitation(ctx context.Context, token, firstName, lastName, password string) (*AuthTokens, error)
 	RefreshToken(ctx context.Context, refreshTokenString string) (*AuthTokens, error)
 	Logout(ctx context.Context, claims jwt.MapClaims) error
 	GenerateGoogleLoginURL(state string) string
@@ -78,6 +80,7 @@ type authService struct {
 	apiKeyRepo           repository.APIKeyRepository
 	passwordResetRepo    repository.PasswordResetRepository
 	notificationClient   client.NotificationClient
+	invitationClient     client.InvitationClient
 	googleOAuthConfig    *oauth2.Config
 	microsoftOAuthConfig *oauth2.Config
 }
@@ -108,14 +111,13 @@ func NewAuthService(userClient client.UserServiceClient, tokenRepo repository.To
 		Endpoint: microsoft.AzureADEndpoint("common"),
 	}
 
-	// NewNotificationClient sekarang mengembalikan struct, bukan pointer.
-	// Jika tetap pointer, baris `notificationClient: client.NewNotificationClient()` juga valid
 	return &authService{
 		userServiceClient:    userClient,
 		tokenRepo:            tokenRepo,
 		apiKeyRepo:           apiKeyRepo,
 		passwordResetRepo:    passwordResetRepo,
-		notificationClient:   *client.NewNotificationClient(), // * di sini jika New... mengembalikan pointer
+		notificationClient:   client.NewNotificationClient(), // This now returns an interface
+		invitationClient:     client.NewInvitationClient(),
 		googleOAuthConfig:    googleOAuthConfig,
 		microsoftOAuthConfig: microsoftOAuthConfig,
 	}
@@ -365,8 +367,6 @@ func (s *authService) VerifyAndEnable2FA(ctx context.Context, userID, totpSecret
 	if !isValid {
 		return errors.New("invalid 2FA code")
 	}
-
-	// PERBAIKAN: Ganti TODO dengan panggilan gRPC yang sebenarnya.
 	return s.userServiceClient.Enable2FA(ctx, userID, totpSecret)
 }
 
@@ -396,14 +396,13 @@ func (s *authService) ForgotPassword(ctx context.Context, email string) error {
 	}
 	token := hex.EncodeToString(tokenBytes)
 
-	tokenHash := hashToken(token) // Gunakan fungsi hash yang sama dengan refresh token
+	tokenHash := hashToken(token)
 	expiresAt := time.Now().Add(1 * time.Hour)
 
 	if err := s.passwordResetRepo.StoreToken(ctx, tokenHash, user.ID, expiresAt); err != nil {
 		return err
 	}
 
-	// Kirim email (secara asinkron)
 	resetLink := fmt.Sprintf("https://app.prismerp.com/reset-password?token=%s", token)
 	s.notificationClient.SendPasswordResetEmail(ctx, user.ID, user.Email, user.FirstName, resetLink)
 
@@ -422,36 +421,30 @@ func (s *authService) ResetPassword(ctx context.Context, token, newPassword stri
 		return err
 	}
 
-	// Update the user's password first.
+	// FIX: Pindahkan penghapusan token setelah password berhasil diupdate.
+	// 1. Update password terlebih dahulu.
 	if err := s.userServiceClient.UpdatePassword(ctx, userID, string(newPasswordHash)); err != nil {
-		return err // If password update fails, do NOT delete the token.
+		return err // Jika password gagal diupdate, JANGAN hapus tokennya.
 	}
 
-	// SECURITY FIX: Only delete the token AFTER the password has been successfully updated.
-	// This makes the operation transactional and prevents the token from being burned on a failed attempt.
+	// 2. Hapus token HANYA JIKA password berhasil diupdate.
 	if err := s.passwordResetRepo.DeleteToken(ctx, tokenHash); err != nil {
-		// Log this error but don't fail the whole operation, as the user's password is now reset.
+		// Log error ini tapi jangan gagalkan operasi, karena password sudah berhasil direset.
 		log.Printf("WARN: Failed to delete used password reset token, but password was reset. TokenHash: %s. Error: %v", tokenHash, err)
 	}
 
 	return nil
 }
 func (s *authService) CreateAPIKey(ctx context.Context, userID, description string) (string, error) {
-	// Format: [Prefix]_[Secret]
-	// Prefix akan disimpan di DB, Secret hanya ada di string lengkapnya.
-	prefix := "zpk" // Zetta Prism Key
-
-	// Buat bagian rahasia yang panjang
-	secretBytes := make([]byte, 32) // 32 bytes -> ~43 karakter base64
+	prefix := "zpk"
+	secretBytes := make([]byte, 32)
 	if _, err := rand.Read(secretBytes); err != nil {
 		return "", err
 	}
 	secretPart := base64.RawURLEncoding.EncodeToString(secretBytes)
-
 	apiKeyString := prefix + "_" + secretPart
 	keyHash := hashToken(apiKeyString)
 
-	// Simpan hash dan prefix ke database
 	_, err := s.apiKeyRepo.StoreKey(ctx, userID, keyHash, prefix, description, nil)
 	if err != nil {
 		return "", err
@@ -460,31 +453,26 @@ func (s *authService) CreateAPIKey(ctx context.Context, userID, description stri
 	return apiKeyString, nil
 }
 
-// GetAPIKeys mengambil metadata semua key milik seorang user.
 func (s *authService) GetAPIKeys(ctx context.Context, userID string) ([]model.APIKeyMetadata, error) {
 	return s.apiKeyRepo.GetKeysForUser(ctx, userID)
 }
 
-// RevokeAPIKey menonaktifkan sebuah API key.
 func (s *authService) RevokeAPIKey(ctx context.Context, userID, keyID string) error {
 	return s.apiKeyRepo.RevokeKey(ctx, userID, keyID)
 }
 
 func (s *authService) ValidateAPIKey(ctx context.Context, apiKeyString string) (*model.User, error) {
 	parts := strings.Split(apiKeyString, "_")
-	// Key harus memiliki setidaknya 2 bagian: prefix dan secret
 	if len(parts) < 2 {
 		return nil, errors.New("invalid api key format")
 	}
 	prefix := parts[0]
 
-	// Cari user dan hash key yang cocok berdasarkan prefix
 	userWithHash, err := s.apiKeyRepo.GetUserByKeyPrefix(ctx, prefix)
 	if err != nil {
 		return nil, errors.New("api key not found, expired, or revoked")
 	}
 
-	// Lakukan perbandingan hash dengan waktu konstan untuk keamanan
 	requestKeyHash := hashToken(apiKeyString)
 	if subtle.ConstantTimeCompare([]byte(requestKeyHash), []byte(userWithHash.KeyHash)) != 1 {
 		return nil, errors.New("invalid api key")
@@ -494,10 +482,9 @@ func (s *authService) ValidateAPIKey(ctx context.Context, apiKeyString string) (
 		return nil, fmt.Errorf("user account is %s", userWithHash.Status)
 	}
 
-	// TODO: Update last_used_at secara asinkron
-
 	return &userWithHash.User, nil
 }
+
 func (s *authService) GenerateImpersonationToken(ctx context.Context, targetUser *model.User, actorID string) (string, time.Time, error) {
 	if targetUser == nil || targetUser.ID == "" {
 		return "", time.Time{}, errors.New("target user for impersonation cannot be nil or have an empty ID")
@@ -506,7 +493,7 @@ func (s *authService) GenerateImpersonationToken(ctx context.Context, targetUser
 		return "", time.Time{}, errors.New("actor ID for impersonation cannot be empty")
 	}
 
-	expirationTime := time.Now().Add(1 * time.Hour) // Sesi impersonasi singkat
+	expirationTime := time.Now().Add(1 * time.Hour)
 	secretKey := []byte(os.Getenv("JWT_SECRET_KEY"))
 
 	claims := jwt.MapClaims{
@@ -517,8 +504,8 @@ func (s *authService) GenerateImpersonationToken(ctx context.Context, targetUser
 		"iat":          time.Now().Unix(),
 		"exp":          expirationTime.Unix(),
 		"jti":          uuid.NewString(),
-		"act":          actorID, // Klaim 'actor' standar JWT
-		"impersonated": true,    // Klaim kustom untuk menandai token ini
+		"act":          actorID,
+		"impersonated": true,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -528,4 +515,34 @@ func (s *authService) GenerateImpersonationToken(ctx context.Context, targetUser
 	}
 
 	return signedToken, expirationTime, nil
+}
+func (s *authService) RegisterWithInvitation(ctx context.Context, token, firstName, lastName, password string) (*AuthTokens, error) {
+	invitationData, err := s.invitationClient.ValidateInvitation(ctx, token)
+	if err != nil {
+		return nil, fmt.Errorf("gagal memvalidasi undangan: %w", err)
+	}
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, fmt.Errorf("gagal hash password: %w", err)
+	}
+
+	createUserReq := &userv1.CreateUserRequest{
+		Email:     invitationData.Email,
+		Password:  string(hashedPassword),
+		FirstName: firstName,
+		LastName:  lastName,
+		Role:      invitationData.Role,
+	}
+
+	createdUser, err := s.userServiceClient.CreateUser(ctx, createUserReq)
+	if err != nil {
+		if errors.Is(err, client.ErrUserAlreadyExists) {
+			return nil, fmt.Errorf("seorang pengguna dengan email ini sudah terdaftar")
+		}
+		return nil, fmt.Errorf("gagal membuat pengguna dari undangan: %w", err)
+	}
+
+	s.notificationClient.SendWelcomeEmail(ctx, createdUser.ID, createdUser.Email, createdUser.FirstName)
+	return s.generateTokenPair(ctx, createdUser)
 }

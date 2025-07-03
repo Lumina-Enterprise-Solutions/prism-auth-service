@@ -341,6 +341,7 @@ func main() {
 		authRoutes.GET("/health", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"status": "healthy"})
 		})
+		authRoutes.POST("/register/invite", authHandler.RegisterWithInvitation)
 		authRoutes.POST("/register", authHandler.Register)
 		authRoutes.POST("/login", authHandler.Login)
 		authRoutes.POST("/login/2fa", authHandler.LoginWith2FA)

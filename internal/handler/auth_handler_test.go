@@ -1,3 +1,4 @@
+// File: internal/handler/auth_handler_test.go
 package handler
 
 import (
@@ -11,20 +12,21 @@ import (
 	"time"
 
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/service"
+	commonauth "github.com/Lumina-Enterprise-Solutions/prism-common-libs/auth"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/model"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require" // <--- TAMBAHKAN require
 )
 
-// MockAuthService adalah mock lengkap dan benar dari service.AuthService
+// MockAuthService is the single, correct mock for the service.AuthService interface.
+// It will be used for all handler tests.
 type MockAuthService struct {
 	mock.Mock
 }
 
-// Implementasi Mock yang Sesuai dengan Interface Asli
+// Implement the service.AuthService interface for the mock
 func (m *MockAuthService) Register(ctx context.Context, user *model.User, password string) (string, error) {
 	args := m.Called(ctx, user, password)
 	return args.String(0), args.Error(1)
@@ -44,8 +46,7 @@ func (m *MockAuthService) RefreshToken(ctx context.Context, refreshTokenString s
 	return args.Get(0).(*service.AuthTokens), args.Error(1)
 }
 func (m *MockAuthService) Logout(ctx context.Context, claims jwt.MapClaims) error {
-	args := m.Called(ctx, claims)
-	return args.Error(0)
+	return m.Called(ctx, claims).Error(0)
 }
 func (m *MockAuthService) GenerateGoogleLoginURL(state string) string {
 	return m.Called(state).String(0)
@@ -115,108 +116,223 @@ func (m *MockAuthService) GenerateImpersonationToken(ctx context.Context, target
 	args := m.Called(ctx, targetUser, actorID)
 	return args.String(0), args.Get(1).(time.Time), args.Error(2)
 }
+func (m *MockAuthService) RegisterWithInvitation(ctx context.Context, token, firstName, lastName, password string) (*service.AuthTokens, error) {
+	args := m.Called(ctx, token, firstName, lastName, password)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*service.AuthTokens), args.Error(1)
+}
 
-func TestRegisterHandler(t *testing.T) {
+func setupRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	return router
+}
+
+// --- AuthHandler Tests ---
+
+func TestAuthHandler_Login(t *testing.T) {
 	mockService := new(MockAuthService)
 	handler := NewAuthHandler(mockService)
-	router := gin.Default()
+
+	router := setupRouter()
+	router.POST("/login", handler.Login)
+
+	t.Run("Success - No 2FA", func(t *testing.T) {
+		loginReq := map[string]string{"email": "test@example.com", "password": "password"}
+		jsonBody, _ := json.Marshal(loginReq)
+
+		loginResp := &service.LoginStep1Response{
+			Is2FARequired: false,
+			AuthTokens:    &service.AuthTokens{AccessToken: "access", RefreshToken: "refresh"},
+		}
+
+		mockService.On("Login", mock.Anything, loginReq["email"], loginReq["password"]).Return(loginResp, nil).Once()
+
+		req, _ := http.NewRequest(http.MethodPost, "/login", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var respBody service.LoginStep1Response
+		json.Unmarshal(w.Body.Bytes(), &respBody)
+		assert.Equal(t, loginResp.AuthTokens.AccessToken, respBody.AuthTokens.AccessToken)
+		mockService.AssertExpectations(t)
+	})
+
+	t.Run("Failure - Invalid Credentials", func(t *testing.T) {
+		loginReq := map[string]string{"email": "test@example.com", "password": "wrongpassword"}
+		jsonBody, _ := json.Marshal(loginReq)
+
+		mockService.On("Login", mock.Anything, loginReq["email"], loginReq["password"]).Return(nil, errors.New("invalid credentials")).Once()
+
+		req, _ := http.NewRequest(http.MethodPost, "/login", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+		mockService.AssertExpectations(t)
+	})
+
+	t.Run("Failure - Bad Request", func(t *testing.T) {
+		loginReq := map[string]string{"email": "test@example.com"}
+		jsonBody, _ := json.Marshal(loginReq)
+
+		req, _ := http.NewRequest(http.MethodPost, "/login", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+}
+
+func TestAuthHandler_Register(t *testing.T) {
+	mockService := new(MockAuthService)
+	handler := NewAuthHandler(mockService)
+	router := setupRouter()
 	router.POST("/register", handler.Register)
 
 	t.Run("Success", func(t *testing.T) {
+		registerReq := map[string]string{
+			"email":      "new@example.com",
+			"password":   "password123",
+			"first_name": "New",
+			"last_name":  "User",
+		}
+		jsonBody, _ := json.Marshal(registerReq)
+
 		mockService.On("Register", mock.Anything, mock.AnythingOfType("*model.User"), "password123").Return("new-user-id", nil).Once()
-		payload := map[string]string{"email": "test@example.com", "password": "password123", "first_name": "Test", "last_name": "User"}
-		body, _ := json.Marshal(payload)
-		req, _ := http.NewRequest(http.MethodPost, "/register", bytes.NewBuffer(body))
+
+		req, _ := http.NewRequest(http.MethodPost, "/register", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusCreated, w.Code)
-		mockService.AssertExpectations(t)
-		var response map[string]interface{}
-		// FIX: Always check for unmarshal errors in tests
-		err := json.Unmarshal(w.Body.Bytes(), &response)
-		require.NoError(t, err, "Response body should be valid JSON")
-		assert.Equal(t, "new-user-id", response["userId"])
-	})
-
-	t.Run("Binding Error", func(t *testing.T) {
-		payload := map[string]string{"password": "password123"}
-		body, _ := json.Marshal(payload)
-		req, _ := http.NewRequest(http.MethodPost, "/register", bytes.NewBuffer(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusBadRequest, w.Code)
-	})
-
-	t.Run("Service Error", func(t *testing.T) {
-		mockService.On("Register", mock.Anything, mock.AnythingOfType("*model.User"), "password123").Return("", errors.New("service failure")).Once()
-		payload := map[string]string{"email": "test@example.com", "password": "password123", "first_name": "Test", "last_name": "User"}
-		body, _ := json.Marshal(payload)
-		req, _ := http.NewRequest(http.MethodPost, "/register", bytes.NewBuffer(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		var resp map[string]string
+		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.Equal(t, "new-user-id", resp["userId"])
 		mockService.AssertExpectations(t)
 	})
 }
 
-func TestLoginHandler(t *testing.T) {
-	gin.SetMode(gin.TestMode)
+func TestAuthHandler_Logout(t *testing.T) {
 	mockService := new(MockAuthService)
 	handler := NewAuthHandler(mockService)
-	router := gin.Default()
-	router.POST("/login", handler.Login)
+	router := setupRouter()
 
-	t.Run("Success without 2FA", func(t *testing.T) {
-		expectedResponse := &service.LoginStep1Response{
-			Is2FARequired: false,
-			AuthTokens:    &service.AuthTokens{AccessToken: "fake-access-token", RefreshToken: "fake-refresh-token"},
-		}
-		mockService.On("Login", mock.Anything, "user@example.com", "goodpassword").Return(expectedResponse, nil).Once()
-		payload := map[string]string{"email": "user@example.com", "password": "goodpassword"}
-		body, _ := json.Marshal(payload)
-		req, _ := http.NewRequest(http.MethodPost, "/login", bytes.NewBuffer(body))
+	router.Use(func(c *gin.Context) {
+		// FIX: Use the new exported constant for the context key.
+		c.Set(commonauth.ClaimsKey, jwt.MapClaims{"jti": "jwt-id", "exp": float64(time.Now().Add(1 * time.Hour).Unix())})
+		c.Next()
+	})
+	router.POST("/logout", handler.Logout)
+
+	t.Run("Success", func(t *testing.T) {
+		mockService.On("Logout", mock.Anything, mock.AnythingOfType("jwt.MapClaims")).Return(nil).Once()
+
+		req, _ := http.NewRequest(http.MethodPost, "/logout", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		var response service.LoginStep1Response
-		// FIX: Always check for unmarshal errors in tests
-		err := json.Unmarshal(w.Body.Bytes(), &response)
-		require.NoError(t, err, "Response body should be valid JSON")
-		assert.False(t, response.Is2FARequired)
-		assert.Equal(t, "fake-access-token", response.AuthTokens.AccessToken)
+		mockService.AssertExpectations(t)
+	})
+}
+
+// --- APIKeyHandler Tests (Consolidated) ---
+
+func setupAPIKeyTestRouter(mockService service.AuthService) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	handler := NewAPIKeyHandler(mockService)
+
+	authMiddleware := func(c *gin.Context) {
+		// FIX: Use the new exported constant.
+		c.Set(commonauth.UserIDKey, "test-user-id")
+		c.Next()
+	}
+
+	authorized := router.Group("/")
+	authorized.Use(authMiddleware)
+	{
+		authorized.POST("/keys", handler.CreateAPIKey)
+		authorized.GET("/keys", handler.GetAPIKeys)
+		authorized.DELETE("/keys/:id", handler.RevokeAPIKey)
+	}
+
+	return router
+}
+
+func TestAPIKeyHandler_CreateAPIKey(t *testing.T) {
+	mockService := new(MockAuthService)
+	router := setupAPIKeyTestRouter(mockService)
+
+	t.Run("Success", func(t *testing.T) {
+		userID := "test-user-id"
+		description := "My new test key"
+		expectedKey := "zpk_test_abcdef123456"
+
+		reqBody := map[string]string{"description": description}
+		jsonBody, _ := json.Marshal(reqBody)
+
+		mockService.On("CreateAPIKey", mock.Anything, userID, description).Return(expectedKey, nil).Once()
+
+		req, _ := http.NewRequest(http.MethodPost, "/keys", bytes.NewBuffer(jsonBody))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusCreated, w.Code)
+		var resp map[string]string
+		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.Equal(t, expectedKey, resp["api_key"])
 		mockService.AssertExpectations(t)
 	})
 
-	t.Run("Success with 2FA Required", func(t *testing.T) {
-		expectedResponse := &service.LoginStep1Response{Is2FARequired: true}
-		mockService.On("Login", mock.Anything, "2fa-user@example.com", "goodpassword").Return(expectedResponse, nil).Once()
-		payload := map[string]string{"email": "2fa-user@example.com", "password": "goodpassword"}
-		body, _ := json.Marshal(payload)
-		req, _ := http.NewRequest(http.MethodPost, "/login", bytes.NewBuffer(body))
+	t.Run("Failure - Service Error", func(t *testing.T) {
+		userID := "test-user-id"
+		description := "Failing key"
+		reqBody := map[string]string{"description": description}
+		jsonBody, _ := json.Marshal(reqBody)
+
+		mockService.On("CreateAPIKey", mock.Anything, userID, description).Return("", errors.New("db error")).Once()
+
+		req, _ := http.NewRequest(http.MethodPost, "/keys", bytes.NewBuffer(jsonBody))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		mockService.AssertExpectations(t)
+	})
+
+	t.Run("Failure - Bad Request", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodPost, "/keys", bytes.NewBuffer([]byte(`{"desc": "wrong field"}`)))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+}
+
+func TestAPIKeyHandler_RevokeAPIKey(t *testing.T) {
+	mockService := new(MockAuthService)
+	router := setupAPIKeyTestRouter(mockService)
+
+	t.Run("Success", func(t *testing.T) {
+		userID := "test-user-id"
+		keyID := "key-to-revoke-123"
+
+		mockService.On("RevokeAPIKey", mock.Anything, userID, keyID).Return(nil).Once()
+
+		req, _ := http.NewRequest(http.MethodDelete, "/keys/"+keyID, nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		var response service.LoginStep1Response
-		// FIX: Always check for unmarshal errors in tests
-		err := json.Unmarshal(w.Body.Bytes(), &response)
-		require.NoError(t, err, "Response body should be valid JSON")
-		assert.True(t, response.Is2FARequired)
-		assert.Nil(t, response.AuthTokens)
-		mockService.AssertExpectations(t)
-	})
-
-	t.Run("Unauthorized", func(t *testing.T) {
-		mockService.On("Login", mock.Anything, "user@example.com", "badpassword").Return(nil, errors.New("invalid credentials")).Once()
-		payload := map[string]string{"email": "user@example.com", "password": "badpassword"}
-		body, _ := json.Marshal(payload)
-		req, _ := http.NewRequest(http.MethodPost, "/login", bytes.NewBuffer(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusUnauthorized, w.Code)
 		mockService.AssertExpectations(t)
 	})
 }

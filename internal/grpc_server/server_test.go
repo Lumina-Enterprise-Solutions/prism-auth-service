@@ -23,6 +23,14 @@ type MockAuthService struct {
 	mock.Mock
 }
 
+func (m *MockAuthService) RegisterWithInvitation(ctx context.Context, token, firstName, lastName, password string) (*service.AuthTokens, error) {
+	args := m.Called(ctx, token, firstName, lastName, password)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*service.AuthTokens), args.Error(1)
+}
+
 func (m *MockAuthService) Register(ctx context.Context, user *model.User, password string) (string, error) {
 	args := m.Called(ctx, user, password)
 	return args.String(0), args.Error(1)

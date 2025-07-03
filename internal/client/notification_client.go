@@ -1,4 +1,4 @@
-// file: services/prism-auth-service/internal/client/notification_client.go
+// File: internal/client/notification_client.go
 package client
 
 import (
@@ -11,14 +11,22 @@ import (
 	"time"
 )
 
-type NotificationClient struct {
+// NotificationClient is now an INTERFACE for better mocking and dependency injection.
+type NotificationClient interface {
+	SendWelcomeEmail(ctx context.Context, userID, email, firstName string)
+	SendPasswordResetEmail(ctx context.Context, userID, email, firstName, resetLink string)
+}
+
+// httpNotificationClient is the concrete implementation of the NotificationClient interface.
+type httpNotificationClient struct {
 	httpClient *http.Client
 	baseURL    string
 }
 
-func NewNotificationClient() *NotificationClient {
+// NewNotificationClient creates a new instance that implements the NotificationClient interface.
+func NewNotificationClient() NotificationClient {
 	baseURL := "http://notification-service:8080"
-	return &NotificationClient{
+	return &httpNotificationClient{
 		httpClient: &http.Client{Timeout: 5 * time.Second},
 		baseURL:    baseURL,
 	}
@@ -32,7 +40,7 @@ type NotificationPayload struct {
 	TemplateData map[string]interface{} `json:"template_data"`
 }
 
-func (c *NotificationClient) sendNotification(ctx context.Context, payload NotificationPayload) {
+func (c *httpNotificationClient) sendNotification(ctx context.Context, payload NotificationPayload) {
 	go func() {
 		body, err := json.Marshal(payload)
 		if err != nil {
@@ -68,8 +76,7 @@ func (c *NotificationClient) sendNotification(ctx context.Context, payload Notif
 	}()
 }
 
-func (c *NotificationClient) SendWelcomeEmail(ctx context.Context, userID, email, firstName string) {
-	// FIX: The payload fields were incorrectly assigned. This maps them correctly.
+func (c *httpNotificationClient) SendWelcomeEmail(ctx context.Context, userID, email, firstName string) {
 	payload := NotificationPayload{
 		RecipientID:  userID,
 		Recipient:    email,
@@ -80,7 +87,7 @@ func (c *NotificationClient) SendWelcomeEmail(ctx context.Context, userID, email
 	c.sendNotification(ctx, payload)
 }
 
-func (c *NotificationClient) SendPasswordResetEmail(ctx context.Context, userID, email, firstName, resetLink string) {
+func (c *httpNotificationClient) SendPasswordResetEmail(ctx context.Context, userID, email, firstName, resetLink string) {
 	payload := NotificationPayload{
 		RecipientID:  userID,
 		Recipient:    email,

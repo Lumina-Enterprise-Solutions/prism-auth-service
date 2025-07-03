@@ -1,3 +1,4 @@
+// services/prism-auth-service/internal/repository/api_key_repository_test.go
 package repository
 
 import (
@@ -7,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid" // <-- ADD THIS IMPORT
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -140,14 +141,14 @@ func TestAPIKeyRepository(t *testing.T) {
 	})
 
 	t.Run("Revoke_Nonexistent_Key", func(t *testing.T) {
-		// FIX: Instead of an invalid string, generate a valid, random UUID
-		// that is guaranteed not to be in the database.
+		// Alih-alih string yang tidak valid, buat UUID acak yang valid
+		// yang dijamin tidak ada di database.
 		nonExistentUUID := uuid.NewString()
 
-		// Act: try to revoke the key using the valid (but non-existent) UUID
+		// Coba cabut kunci menggunakan UUID yang valid (tapi tidak ada).
 		err := repo.RevokeKey(ctx, userID, nonExistentUUID)
 
-		// Assert: should return "no rows" error because the UUID doesn't match any key
+		// Seharusnya mengembalikan error "no rows" karena UUID tidak cocok dengan kunci mana pun.
 		assert.ErrorIs(t, err, pgx.ErrNoRows, "Should return ErrNoRows for non-existent key")
 	})
 }
