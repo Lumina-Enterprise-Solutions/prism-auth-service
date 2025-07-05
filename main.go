@@ -12,6 +12,10 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/Lumina-Enterprise-Solutions/prism-auth-service/docs" // Import generated docs
+	swaggerfiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
+
 	authconfig "github.com/Lumina-Enterprise-Solutions/prism-auth-service/config"
 	authclient "github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/client"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/grpc_server"
@@ -347,6 +351,7 @@ func main() {
 	authRoutes := router.Group("/auth") // Group semua auth-related routes
 	{
 
+		authRoutes.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerfiles.Handler))
 		// Rute Publik - tidak memerlukan autentikasi
 		authRoutes.GET("/health", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"status": "healthy"})

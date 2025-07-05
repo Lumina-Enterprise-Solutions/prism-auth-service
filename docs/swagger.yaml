@@ -1,0 +1,46 @@
+definitions:
+  handler.Login.LoginRequest:
+    properties:
+      email:
+        type: string
+      password:
+        type: string
+    required:
+    - email
+    - password
+    type: object
+  handler.Register.RegisterRequest:
+    properties:
+      email:
+        type: string
+      first_name:
+        type: string
+      last_name:
+        type: string
+      password:
+        minLength: 8
+        type: string
+    required:
+    - email
+    - first_name
+    - last_name
+    - password
+    type: object
+  service.AuthTokens:
+    properties:
+      access_token:
+        type: string
+      refresh_token:
+        type: string
+    type: object
+  service.LoginStep1Response:
+    properties:
+      auth_tokens:
+        $ref: '#/definitions/service.AuthTokens'
+      is_2fa_required:
+        type: boolean
+    type: object
+info:
+  contact: {}
+paths: {}
+swagger: "2.0"

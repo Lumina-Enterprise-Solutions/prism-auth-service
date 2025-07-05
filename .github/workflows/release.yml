@@ -5,12 +5,24 @@ name: Release and Publish Docker Image
 # This workflow runs when a new tag starting with 'v' (e.g., v1.0.0) is pushed.
 on:
   push:
-    tags:
-    - 'v*'
+    branches:
+    - main
 
 jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: google-github-actions/release-please-action@v4
+      with:
+        release-type: go
+        package-name: prism-auth-service
+
+  # JOB YANG ADA DULU: di-trigger saat release-please berhasil
   release-and-publish:
     name: Release and Publish
+    needs: release-please
+    # Jalankan job ini hanya jika release-please membuat rilis baru
+    if: ${{ needs.release-please.outputs.release_created }}
     runs-on: ubuntu-latest
     # Set permissions for the GITHUB_TOKEN to allow pushing to GHCR and creating releases.
     permissions:
@@ -55,17 +67,4 @@ jobs:
         push: true # Actually push the image
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-
-    - name: Create GitHub Release
-      id: create_release
-      uses: softprops/action-gh-release@v2
-      with:
-        # This creates a draft release, allowing you to review before publishing.
-        # Change to 'false' to publish immediately.
-        draft: false
-        # This will automatically generate release notes from PRs since the last release.
-        generate_release_notes: true
-        # The release title will be the tag name (e.g., "v1.0.0").
-        # The body will be the auto-generated release notes.
+        cache-from: type=gha,mode=max
