@@ -143,13 +143,13 @@ type authServiceMocks struct {
 	invitationClient   *MockInvitationClient
 }
 
-func setupServiceTest() (*authService, authServiceMocks) {
+func setupServiceTest(t *testing.T) (*authService, authServiceMocks) {
 	// Set dummy env vars required by the service
-	os.Setenv("JWT_SECRET_KEY", "test-secret")
-	os.Setenv("GOOGLE_OAUTH_CLIENT_ID", "test-google-id")
-	os.Setenv("GOOGLE_OAUTH_CLIENT_SECRET", "test-google-secret")
-	os.Setenv("MICROSOFT_OAUTH_CLIENT_ID", "test-ms-id")
-	os.Setenv("MICROSOFT_OAUTH_CLIENT_SECRET", "test-ms-secret")
+	t.Setenv("JWT_SECRET_KEY", "test-secret")
+	t.Setenv("GOOGLE_OAUTH_CLIENT_ID", "test-google-id")
+	t.Setenv("GOOGLE_OAUTH_CLIENT_SECRET", "test-google-secret")
+	t.Setenv("MICROSOFT_OAUTH_CLIENT_ID", "test-ms-id")
+	t.Setenv("MICROSOFT_OAUTH_CLIENT_SECRET", "test-ms-secret")
 
 	mocks := authServiceMocks{
 		userClient:         new(MockUserServiceClient),
@@ -175,7 +175,7 @@ func TestAuthService_Register(t *testing.T) {
 	password := "password123"
 
 	t.Run("Success", func(t *testing.T) {
-		service, mocks := setupServiceTest()
+		service, mocks := setupServiceTest(t)
 		reqMatcher := mock.MatchedBy(func(req *userv1.CreateUserRequest) bool {
 			err := bcrypt.CompareHashAndPassword([]byte(req.Password), []byte(password))
 			return req.Email == user.Email && err == nil
@@ -194,7 +194,7 @@ func TestAuthService_Register(t *testing.T) {
 	})
 
 	t.Run("User Service Error", func(t *testing.T) {
-		service, mocks := setupServiceTest()
+		service, mocks := setupServiceTest(t)
 		mocks.userClient.On("CreateUser", ctx, mock.Anything).Return(nil, errors.New("gRPC error")).Once()
 
 		_, err := service.Register(ctx, user, password)
@@ -221,7 +221,7 @@ func TestAuthService_Login(t *testing.T) {
 	}
 
 	t.Run("Success - No 2FA", func(t *testing.T) {
-		service, mocks := setupServiceTest()
+		service, mocks := setupServiceTest(t)
 		user := *baseUser // copy
 		user.Is2FAEnabled = false
 
@@ -240,7 +240,7 @@ func TestAuthService_Login(t *testing.T) {
 	})
 
 	t.Run("Success - 2FA Required", func(t *testing.T) {
-		service, mocks := setupServiceTest()
+		service, mocks := setupServiceTest(t)
 		user := *baseUser // copy
 		user.Is2FAEnabled = true
 
@@ -255,7 +255,7 @@ func TestAuthService_Login(t *testing.T) {
 	})
 
 	t.Run("Failure - Invalid Password", func(t *testing.T) {
-		service, mocks := setupServiceTest()
+		service, mocks := setupServiceTest(t)
 		mocks.userClient.On("GetUserAuthDetailsByEmail", ctx, email).Return(baseUser, nil).Once()
 
 		_, err := service.Login(ctx, email, "wrongpassword")
@@ -266,7 +266,7 @@ func TestAuthService_Login(t *testing.T) {
 	})
 
 	t.Run("Failure - User Not Found", func(t *testing.T) {
-		service, mocks := setupServiceTest()
+		service, mocks := setupServiceTest(t)
 		mocks.userClient.On("GetUserAuthDetailsByEmail", ctx, email).Return(nil, errors.New("not found")).Once()
 
 		_, err := service.Login(ctx, email, password)
@@ -277,7 +277,7 @@ func TestAuthService_Login(t *testing.T) {
 	})
 
 	t.Run("Failure - Inactive User", func(t *testing.T) {
-		service, mocks := setupServiceTest()
+		service, mocks := setupServiceTest(t)
 		user := *baseUser
 		user.Status = "suspended"
 		mocks.userClient.On("GetUserAuthDetailsByEmail", ctx, email).Return(&user, nil).Once()
@@ -304,7 +304,7 @@ func TestAuthService_RefreshToken(t *testing.T) {
 	user := &model.User{ID: userID, Email: "user@example.com", RoleName: "Admin", Status: "active"}
 
 	t.Run("Success", func(t *testing.T) {
-		service, mocks := setupServiceTest()
+		service, mocks := setupServiceTest(t)
 		mocks.tokenRepo.On("GetRefreshToken", ctx, refreshTokenHash).Return(storedToken, nil).Once()
 		mocks.tokenRepo.On("DeleteRefreshToken", ctx, refreshTokenHash).Return(nil).Once()
 		mocks.userClient.On("GetUserAuthDetailsByID", ctx, userID).Return(user, nil).Once()
@@ -321,7 +321,7 @@ func TestAuthService_RefreshToken(t *testing.T) {
 	})
 
 	t.Run("Failure - Token Expired", func(t *testing.T) {
-		service, mocks := setupServiceTest()
+		service, mocks := setupServiceTest(t)
 		expiredStoredToken := &repository.RefreshToken{
 			UserID:    userID,
 			TokenHash: refreshTokenHash,
@@ -344,7 +344,7 @@ func TestAuthService_VerifyAndEnable2FA(t *testing.T) {
 
 	// Generate a real secret and a valid code for it in each test run
 	t.Run("Success", func(t *testing.T) {
-		service, mocks := setupServiceTest()
+		service, mocks := setupServiceTest(t)
 		setupInfo, err := service.Setup2FA(ctx, userID, "test@example.com")
 		require.NoError(t, err)
 		validCode, err := totp.GenerateCode(setupInfo.Secret, time.Now())
@@ -359,7 +359,7 @@ func TestAuthService_VerifyAndEnable2FA(t *testing.T) {
 	})
 
 	t.Run("Failure - Invalid Code", func(t *testing.T) {
-		service, _ := setupServiceTest()
+		service, _ := setupServiceTest(t)
 		setupInfo, err := service.Setup2FA(ctx, userID, "test@example.com")
 		require.NoError(t, err)
 
@@ -378,7 +378,7 @@ func TestAuthService_ResetPassword(t *testing.T) {
 	newPassword := "newSecurePassword123"
 
 	t.Run("Success", func(t *testing.T) {
-		service, mocks := setupServiceTest()
+		service, mocks := setupServiceTest(t)
 		mocks.passwordResetRepo.On("GetUserIDByToken", ctx, tokenHash).Return(userID, nil).Once()
 
 		// Match any hashed password, since we can't predict the salt
@@ -394,7 +394,7 @@ func TestAuthService_ResetPassword(t *testing.T) {
 	})
 
 	t.Run("Failure - Invalid Token", func(t *testing.T) {
-		service, mocks := setupServiceTest()
+		service, mocks := setupServiceTest(t)
 		mocks.passwordResetRepo.On("GetUserIDByToken", ctx, tokenHash).Return("", errors.New("not found")).Once()
 
 		err := service.ResetPassword(ctx, token, newPassword)
@@ -405,7 +405,7 @@ func TestAuthService_ResetPassword(t *testing.T) {
 	})
 
 	t.Run("Failure - User Service Fails to Update", func(t *testing.T) {
-		service, mocks := setupServiceTest()
+		service, mocks := setupServiceTest(t)
 		mocks.passwordResetRepo.On("GetUserIDByToken", ctx, tokenHash).Return(userID, nil).Once()
 		mocks.userClient.On("UpdatePassword", ctx, userID, mock.AnythingOfType("string")).Return(errors.New("db error")).Once()
 
@@ -439,7 +439,7 @@ func TestAuthService_ValidateAPIKey(t *testing.T) {
 	}
 
 	t.Run("Success", func(t *testing.T) {
-		service, mocks := setupServiceTest()
+		service, mocks := setupServiceTest(t)
 		mocks.apiKeyRepo.On("GetUserByKeyPrefix", ctx, prefix).Return(userWithHash, nil).Once()
 
 		user, err := service.ValidateAPIKey(ctx, apiKeyString)
@@ -451,14 +451,14 @@ func TestAuthService_ValidateAPIKey(t *testing.T) {
 	})
 
 	t.Run("Failure - Invalid Key Format", func(t *testing.T) {
-		service, _ := setupServiceTest()
+		service, _ := setupServiceTest(t)
 		_, err := service.ValidateAPIKey(ctx, "invalidkey")
 		require.Error(t, err)
 		assert.Equal(t, "invalid api key format", err.Error())
 	})
 
 	t.Run("Failure - Key Not Found", func(t *testing.T) {
-		service, mocks := setupServiceTest()
+		service, mocks := setupServiceTest(t)
 		mocks.apiKeyRepo.On("GetUserByKeyPrefix", ctx, prefix).Return(nil, errors.New("not found")).Once()
 
 		_, err := service.ValidateAPIKey(ctx, apiKeyString)
@@ -469,7 +469,7 @@ func TestAuthService_ValidateAPIKey(t *testing.T) {
 	})
 
 	t.Run("Failure - Hash Mismatch", func(t *testing.T) {
-		service, mocks := setupServiceTest()
+		service, mocks := setupServiceTest(t)
 		// Store a different hash to simulate a mismatch
 		mismatchedUserWithHash := &repository.UserWithKeyHash{
 			User:    model.User{ID: "api-user-id", Status: "active"},
@@ -485,7 +485,7 @@ func TestAuthService_ValidateAPIKey(t *testing.T) {
 	})
 
 	t.Run("Failure - Inactive User", func(t *testing.T) {
-		service, mocks := setupServiceTest()
+		service, mocks := setupServiceTest(t)
 		inactiveUserWithHash := &repository.UserWithKeyHash{
 			User:    model.User{ID: "api-user-id", Status: "inactive"},
 			KeyHash: keyHash,
@@ -501,7 +501,7 @@ func TestAuthService_ValidateAPIKey(t *testing.T) {
 }
 
 func TestAuthService_GenerateImpersonationToken(t *testing.T) {
-	service, _ := setupServiceTest()
+	service, _ := setupServiceTest(t)
 	ctx := context.Background()
 
 	targetUser := &model.User{ID: "target-user", Email: "target@example.com", RoleName: "Manager"}

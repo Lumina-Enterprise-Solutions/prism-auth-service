@@ -45,7 +45,11 @@ func (c *httpInvitationClient) ValidateInvitation(ctx context.Context, token str
 	if err != nil {
 		return nil, fmt.Errorf("gagal menghubungi invitation-service: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Warn().Err(err).Msg("Gagal menutup response body dari invitation-service")
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)

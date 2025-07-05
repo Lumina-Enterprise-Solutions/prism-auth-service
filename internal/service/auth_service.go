@@ -5,24 +5,31 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"image/png"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	authconfig "github.com/Lumina-Enterprise-Solutions/prism-auth-service/config"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/client"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/redis"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/repository"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/model"
 	userv1 "github.com/Lumina-Enterprise-Solutions/prism-protobufs/gen/go/prism/user/v1"
+	"github.com/crewjam/saml/samlsp"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/pquerna/otp/totp"
@@ -545,4 +552,51 @@ func (s *authService) RegisterWithInvitation(ctx context.Context, token, firstNa
 
 	s.notificationClient.SendWelcomeEmail(ctx, createdUser.ID, createdUser.Email, createdUser.FirstName)
 	return s.generateTokenPair(ctx, createdUser)
+}
+
+func NewSAMLServiceProvider(cfg authconfig.SAMLConfig) (*samlsp.Middleware, error) {
+	// Validasi bahwa konfigurasi penting tidak kosong.
+	if cfg.IDPMetadataURL == "" || cfg.SPEntityID == "" || cfg.SPCertificate == "" || cfg.SPPrivateKey == "" {
+		log.Println("Peringatan: Konfigurasi SAML tidak lengkap, SSO akan dinonaktifkan.")
+		return nil, nil // Kembalikan nil agar aplikasi bisa tetap berjalan tanpa SAML.
+	}
+
+	keyPair, err := tls.X509KeyPair([]byte(cfg.SPCertificate), []byte(cfg.SPPrivateKey))
+	if err != nil {
+		return nil, fmt.Errorf("gagal memuat key pair SP: %w", err)
+	}
+	keyPair.Leaf, err = x509.ParseCertificate(keyPair.Certificate[0])
+	if err != nil {
+		return nil, fmt.Errorf("gagal parse sertifikat SP: %w", err)
+	}
+
+	idpMetadataURL, err := url.Parse(cfg.IDPMetadataURL)
+	if err != nil {
+		return nil, fmt.Errorf("URL metadata IdP tidak valid: %w", err)
+	}
+
+	rootURL, err := url.Parse(cfg.SPEntityID)
+	if err != nil {
+		return nil, fmt.Errorf("URL root SP (Entity ID) tidak valid: %w", err)
+	}
+
+	// FIX: Menggunakan cara baru untuk mengambil metadata IdP.
+	// Pustaka `samlsp` sekarang mengharapkan objek metadata, bukan hanya URL.
+	idpMetadata, err := samlsp.FetchMetadata(context.Background(), http.DefaultClient, *idpMetadataURL)
+	if err != nil {
+		return nil, fmt.Errorf("gagal mengambil metadata IdP dari URL: %w", err)
+	}
+
+	// Membuat middleware SAML.
+	samlSP, err := samlsp.New(samlsp.Options{
+		URL:         *rootURL,
+		Key:         keyPair.PrivateKey.(*rsa.PrivateKey),
+		Certificate: keyPair.Leaf,
+		IDPMetadata: idpMetadata, // FIX: Menggunakan field IDPMetadata yang sudah di-fetch.
+	})
+	if err != nil {
+		return nil, fmt.Errorf("gagal membuat middleware SAML SP: %w", err)
+	}
+
+	return samlSP, nil
 }

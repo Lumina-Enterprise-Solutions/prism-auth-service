@@ -13,6 +13,7 @@ Layanan ini adalah gerbang utama untuk semua otentikasi dan otorisasi dalam ekos
 -   **Otentikasi Berbasis JWT**: Menggunakan Access Token (berumur pendek) dan Refresh Token (berumur panjang).
 -   **Registrasi & Login**: Endpoint standar untuk registrasi pengguna baru dan login dengan email/password.
 -   **Social Login (OAuth2)**: Integrasi siap pakai untuk login melalui Google dan Microsoft.
+-   **Single Sign-On (SSO)**: Fondasi untuk integrasi dengan penyedia identitas SAML 2.0 seperti Okta dan Azure AD.
 -   **Two-Factor Authentication (2FA)**: Dukungan untuk setup dan verifikasi 2FA menggunakan TOTP (Time-based One-Time Password).
 -   **Manajemen Token**: Endpoint untuk me-refresh access token dan melakukan logout (mencabut token).
 -   **Observabilitas**: Terintegrasi penuh dengan OpenTelemetry untuk tracing terdistribusi ke Jaeger.
