@@ -3,6 +3,7 @@ package client
 
 import (
 	"context"
+	"log"
 	"net"
 	"testing"
 
@@ -11,21 +12,20 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
 
 const bufSize = 1024 * 1024
 
-var lis *bufconn.Listener
-
-// mockUserServiceServer is a mock implementation of the gRPC server.
+// mockUserServiceServer adalah implementasi mock dari server gRPC.
 type mockUserServiceServer struct {
 	userv1.UnimplementedUserServiceServer
-	// You can add fields here to control the mock's behavior
 	ShouldReturnError bool
 }
 
+// Implementasi metode mock...
 func (s *mockUserServiceServer) GetUserAuthDetailsByEmail(ctx context.Context, req *userv1.GetUserAuthDetailsByEmailRequest) (*userv1.UserAuthDetailsResponse, error) {
 	if s.ShouldReturnError {
 		return nil, status.Error(codes.NotFound, "mock user not found")
@@ -49,41 +49,55 @@ func (s *mockUserServiceServer) Enable2FA(ctx context.Context, req *userv1.Enabl
 	return &userv1.Enable2FAResponse{Success: true}, nil
 }
 
-func setupMockGRPCServer() {
-	lis = bufconn.Listen(bufSize)
+// setupTestGRPCServerAndClient adalah fungsi helper yang menyatukan setup server DAN client.
+func setupTestGRPCServerAndClient(t *testing.T) (UserServiceClient, func()) {
+	t.Helper()
+
+	listener := bufconn.Listen(bufSize)
 	s := grpc.NewServer()
 	userv1.RegisterUserServiceServer(s, &mockUserServiceServer{})
+
 	go func() {
-		if err := s.Serve(lis); err != nil {
-			panic(err)
+		if err := s.Serve(listener); err != nil {
+			log.Fatalf("Server exited with error: %v", err)
 		}
 	}()
-}
 
-func bufDialer(context.Context, string) (net.Conn, error) {
-	return lis.Dial()
-}
-
-func TestMain(m *testing.M) {
-	setupMockGRPCServer()
-	m.Run()
-}
-
-func TestUserServiceClient_GetUserAuthDetailsByEmail(t *testing.T) {
-	ctx := context.Background()
-	conn, err := grpc.DialContext(ctx, "bufnet", grpc.WithContextDialer(bufDialer), grpc.WithInsecure())
+	// FIX: Gunakan grpc.NewClient dengan opsi yang benar.
+	// Ini adalah cara yang direkomendasikan dan tidak akan memicu staticcheck.
+	conn, err := grpc.NewClient("passthrough:///bufnet", // Skema "passthrough" sangat penting
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			return listener.Dial()
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
 	require.NoError(t, err)
-	defer conn.Close()
 
 	client := &grpcUserServiceClient{
 		client: userv1.NewUserServiceClient(conn),
 		conn:   conn,
 	}
 
+	teardown := func() {
+		s.Stop()
+		if err := conn.Close(); err != nil {
+			t.Logf("Gagal menutup koneksi gRPC: %v", err)
+		}
+	}
+
+	return client, teardown
+}
+
+func TestUserServiceClient_GetUserAuthDetailsByEmail(t *testing.T) {
+	client, teardown := setupTestGRPCServerAndClient(t)
+	defer teardown()
+
+	ctx := context.Background()
+
 	t.Run("Success", func(t *testing.T) {
 		user, err := client.GetUserAuthDetailsByEmail(ctx, "test@example.com")
 		require.NoError(t, err)
-		assert.NotNil(t, user)
+		require.NotNil(t, user)
 		assert.Equal(t, "user-123", user.ID)
 		assert.Equal(t, "Admin", user.RoleName)
 	})

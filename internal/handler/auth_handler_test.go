@@ -18,6 +18,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockAuthService is the single, correct mock for the service.AuthService interface.
@@ -158,7 +159,8 @@ func TestAuthHandler_Login(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, w.Code)
 		var respBody service.LoginStep1Response
-		json.Unmarshal(w.Body.Bytes(), &respBody)
+		err := json.Unmarshal(w.Body.Bytes(), &respBody)
+		require.NoError(t, err, "Gagal unmarshal response body")
 		assert.Equal(t, loginResp.AuthTokens.AccessToken, respBody.AuthTokens.AccessToken)
 		mockService.AssertExpectations(t)
 	})
@@ -216,7 +218,8 @@ func TestAuthHandler_Register(t *testing.T) {
 
 		assert.Equal(t, http.StatusCreated, w.Code)
 		var resp map[string]string
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err, "Gagal unmarshal response body")
 		assert.Equal(t, "new-user-id", resp["userId"])
 		mockService.AssertExpectations(t)
 	})
@@ -291,7 +294,9 @@ func TestAPIKeyHandler_CreateAPIKey(t *testing.T) {
 
 		assert.Equal(t, http.StatusCreated, w.Code)
 		var resp map[string]string
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err, "Gagal unmarshal response body")
+
 		assert.Equal(t, expectedKey, resp["api_key"])
 		mockService.AssertExpectations(t)
 	})

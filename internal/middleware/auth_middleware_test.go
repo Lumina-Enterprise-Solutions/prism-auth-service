@@ -7,7 +7,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -144,11 +143,8 @@ func setupMiddlewareTest() (*gin.Engine, *MockAuthService, redismock.ClientMock)
 }
 
 func TestFlexibleAuthMiddleware(t *testing.T) {
-	os.Setenv("JWT_SECRET_KEY", "test-secret")
-	defer os.Unsetenv("JWT_SECRET_KEY")
-
-	os.Setenv("REDIS_ADDR", "localhost:6379")
-	defer os.Unsetenv("REDIS_ADDR")
+	t.Setenv("JWT_SECRET_KEY", "test-secret")
+	t.Setenv("REDIS_ADDR", "localhost:6379")
 
 	t.Run("Success with API Key", func(t *testing.T) {
 		// ## PERBAIKAN: Tangkap mockRedis yang tidak digunakan agar test tidak error.
@@ -166,7 +162,8 @@ func TestFlexibleAuthMiddleware(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, w.Code)
 		var resp map[string]string
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
 		assert.Equal(t, "user-from-apikey", resp["user_id"])
 		mockService.AssertExpectations(t)
 	})
@@ -195,7 +192,8 @@ func TestFlexibleAuthMiddleware(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, w.Code)
 		var resp map[string]string
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		err = json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
 		assert.Equal(t, "user-from-jwt", resp["user_id"])
 		require.NoError(t, mockRedis.ExpectationsWereMet(), "Ekspektasi Redis tidak terpenuhi")
 	})
