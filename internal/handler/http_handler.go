@@ -10,16 +10,21 @@ import (
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/service"
 	commonjwt "github.com/Lumina-Enterprise-Solutions/prism-common-libs/auth"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/model"
+	"github.com/crewjam/saml/samlsp"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 )
 
 type AuthHandler struct {
 	authService service.AuthService
+	samlSP      *samlsp.Middleware
 }
 
-func NewAuthHandler(authService service.AuthService) *AuthHandler {
-	return &AuthHandler{authService: authService}
+func NewAuthHandler(authService service.AuthService, samlSP *samlsp.Middleware) *AuthHandler {
+	return &AuthHandler{
+		authService: authService,
+		samlSP:      samlSP,
+	}
 }
 
 func (h *AuthHandler) Register(c *gin.Context) {
@@ -310,4 +315,38 @@ func (h *AuthHandler) RegisterWithInvitation(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, tokens)
+}
+
+// SAMLMetadata melayani metadata dari Service Provider kita.
+func (h *AuthHandler) SAMLMetadata(c *gin.Context) {
+	if h.samlSP == nil {
+		c.JSON(http.StatusNotImplemented, gin.H{"error": "SAML SSO is not configured."})
+		return
+	}
+	h.samlSP.ServeMetadata(c.Writer, c.Request)
+}
+
+// SAMLAssertionConsumerService menangani callback dari Identity Provider.
+func (h *AuthHandler) SAMLAssertionConsumerService(c *gin.Context) {
+	if h.samlSP == nil {
+		c.JSON(http.StatusNotImplemented, gin.H{"error": "SAML SSO is not configured."})
+		return
+	}
+	h.samlSP.ServeACS(c.Writer, c.Request)
+}
+
+// SAMLLogin memulai alur login SAML.
+func (h *AuthHandler) SAMLLogin(c *gin.Context) {
+	if h.samlSP == nil {
+		c.JSON(http.StatusNotImplemented, gin.H{"error": "SAML SSO is not configured."})
+		return
+	}
+	// Middleware samlsp akan meng-handle redirect ke IdP.
+	h.samlSP.HandleStartAuthFlow(c.Writer, c.Request)
+}
+
+// SAMLLogout memulai alur logout SAML.
+func (h *AuthHandler) SAMLLogout(c *gin.Context) {
+	// Logika logout SAML yang lebih kompleks akan ditambahkan di sini.
+	c.JSON(http.StatusOK, gin.H{"message": "SAML logout initiated."})
 }

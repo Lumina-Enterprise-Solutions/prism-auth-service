@@ -20,7 +20,6 @@ import (
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/redis"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/repository"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/service"
-
 	commonclient "github.com/Lumina-Enterprise-Solutions/prism-common-libs/client"
 	enhancedlogger "github.com/Lumina-Enterprise-Solutions/prism-common-libs/enhanced_logger"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/telemetry"
@@ -294,7 +293,17 @@ func main() {
 	// Handler - Inisialisasi HTTP handlers
 	serviceLogger.Debug().Msg("Initializing HTTP handlers")
 
-	authHandler := handler.NewAuthHandler(authSvc)
+	// Inisialisasi SAML Service Provider
+	samlSP, err := service.NewSAMLServiceProvider(cfg.SAML)
+	if err != nil {
+		// Log error tapi jangan hentikan aplikasi jika SAML gagal (mungkin opsional)
+		serviceLogger.Error().Err(err).Msg("Gagal menginisialisasi SAML Service Provider, SSO akan dinonaktifkan.")
+	} else if samlSP != nil {
+		serviceLogger.Info().Msg("SAML Service Provider berhasil diinisialisasi.")
+	}
+
+	// Inisialisasi handler
+	authHandler := handler.NewAuthHandler(authSvc, samlSP) // Handler sekarang menerima samlSP
 	apiKeyHandler := handler.NewAPIKeyHandler(authSvc)
 
 	serviceLogger.Info().Msg("HTTP handlers initialized successfully")
@@ -337,6 +346,7 @@ func main() {
 
 	authRoutes := router.Group("/auth") // Group semua auth-related routes
 	{
+
 		// Rute Publik - tidak memerlukan autentikasi
 		authRoutes.GET("/health", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"status": "healthy"})
@@ -375,6 +385,19 @@ func main() {
 				keysRoutes.POST("/", apiKeyHandler.CreateAPIKey)
 				keysRoutes.GET("/", apiKeyHandler.GetAPIKeys)
 				keysRoutes.DELETE("/:id", apiKeyHandler.RevokeAPIKey)
+			}
+		}
+		if samlSP != nil {
+			samlRoutes := authRoutes.Group("/saml")
+			{
+				// FIX: Handler untuk metadata dan ACS (Assertion Consumer Service)
+				// ditangani langsung oleh middleware `samlsp`.
+				samlRoutes.GET("/metadata", gin.WrapF(samlSP.ServeMetadata))
+				samlRoutes.POST("/acs", gin.WrapF(samlSP.ServeACS))
+
+				// Endpoint yang kita buat untuk memulai alur login/logout.
+				samlRoutes.GET("/login", authHandler.SAMLLogin)
+				samlRoutes.POST("/logout", authHandler.SAMLLogout)
 			}
 		}
 	}

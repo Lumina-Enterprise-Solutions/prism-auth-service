@@ -133,8 +133,9 @@ func setupRouter() *gin.Engine {
 // --- AuthHandler Tests ---
 
 func TestAuthHandler_Login(t *testing.T) {
+	// FIX: Berikan nil untuk argumen samlSP saat membuat handler.
 	mockService := new(MockAuthService)
-	handler := NewAuthHandler(mockService)
+	handler := NewAuthHandler(mockService, nil) // Memberikan nil untuk middleware SAML
 
 	router := setupRouter()
 	router.POST("/login", handler.Login)
@@ -192,7 +193,8 @@ func TestAuthHandler_Login(t *testing.T) {
 
 func TestAuthHandler_Register(t *testing.T) {
 	mockService := new(MockAuthService)
-	handler := NewAuthHandler(mockService)
+	// FIX: Berikan nil untuk argumen samlSP saat membuat handler.
+	handler := NewAuthHandler(mockService, nil)
 	router := setupRouter()
 	router.POST("/register", handler.Register)
 
@@ -222,11 +224,11 @@ func TestAuthHandler_Register(t *testing.T) {
 
 func TestAuthHandler_Logout(t *testing.T) {
 	mockService := new(MockAuthService)
-	handler := NewAuthHandler(mockService)
+	// FIX: Berikan nil untuk argumen samlSP saat membuat handler.
+	handler := NewAuthHandler(mockService, nil)
 	router := setupRouter()
 
 	router.Use(func(c *gin.Context) {
-		// FIX: Use the new exported constant for the context key.
 		c.Set(commonauth.ClaimsKey, jwt.MapClaims{"jti": "jwt-id", "exp": float64(time.Now().Add(1 * time.Hour).Unix())})
 		c.Next()
 	})
@@ -249,10 +251,11 @@ func TestAuthHandler_Logout(t *testing.T) {
 func setupAPIKeyTestRouter(mockService service.AuthService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	handler := NewAPIKeyHandler(mockService)
+	// FIX: Berikan nil untuk argumen samlSP saat membuat handler.
+	// Karena kita hanya menguji APIKeyHandler, ini tidak masalah.
+	apiKeyHandler := NewAPIKeyHandler(mockService) // APIKeyHandler tidak berubah
 
 	authMiddleware := func(c *gin.Context) {
-		// FIX: Use the new exported constant.
 		c.Set(commonauth.UserIDKey, "test-user-id")
 		c.Next()
 	}
@@ -260,9 +263,9 @@ func setupAPIKeyTestRouter(mockService service.AuthService) *gin.Engine {
 	authorized := router.Group("/")
 	authorized.Use(authMiddleware)
 	{
-		authorized.POST("/keys", handler.CreateAPIKey)
-		authorized.GET("/keys", handler.GetAPIKeys)
-		authorized.DELETE("/keys/:id", handler.RevokeAPIKey)
+		authorized.POST("/keys", apiKeyHandler.CreateAPIKey)
+		authorized.GET("/keys", apiKeyHandler.GetAPIKeys)
+		authorized.DELETE("/keys/:id", apiKeyHandler.RevokeAPIKey)
 	}
 
 	return router
