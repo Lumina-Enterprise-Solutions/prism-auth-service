@@ -1,0 +1,70 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "contact": {}
+    },
+    "paths": {},
+    "definitions": {
+        "handler.Login.LoginRequest": {
+            "type": "object",
+            "required": [
+                "email",
+                "password"
+            ],
+            "properties": {
+                "email": {
+                    "type": "string"
+                },
+                "password": {
+                    "type": "string"
+                }
+            }
+        },
+        "handler.Register.RegisterRequest": {
+            "type": "object",
+            "required": [
+                "email",
+                "first_name",
+                "last_name",
+                "password"
+            ],
+            "properties": {
+                "email": {
+                    "type": "string"
+                },
+                "first_name": {
+                    "type": "string"
+                },
+                "last_name": {
+                    "type": "string"
+                },
+                "password": {
+                    "type": "string",
+                    "minLength": 8
+                }
+            }
+        },
+        "service.AuthTokens": {
+            "type": "object",
+            "properties": {
+                "access_token": {
+                    "type": "string"
+                },
+                "refresh_token": {
+                    "type": "string"
+                }
+            }
+        },
+        "service.LoginStep1Response": {
+            "type": "object",
+            "properties": {
+                "auth_tokens": {
+                    "$ref": "#/definitions/service.AuthTokens"
+                },
+                "is_2fa_required": {
+                    "type": "boolean"
+                }
+            }
+        }
+    }
+}

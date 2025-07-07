@@ -27,6 +27,16 @@ func NewAuthHandler(authService service.AuthService, samlSP *samlsp.Middleware) 
 	}
 }
 
+// Register godoc
+// @Summary      Register a new user
+// @Description  Registers a new user with email, password, and name.
+// @Tags         Auth
+// @Accept       json
+// @Produce      json
+// @Param        request body handler.Register.RegisterRequest true "User Registration Info"
+// @Success      201  {object}  map[string]string
+// @Failure      400  {object}  map[string]string
+// @Failure      500  {object}  map[string]string
 func (h *AuthHandler) Register(c *gin.Context) {
 	type RegisterRequest struct {
 		Email     string `json:"email" binding:"required,email"`
@@ -59,6 +69,16 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	})
 }
 
+// Login godoc
+// @Summary      Logs a user in
+// @Description  Authenticates a user and returns JWT tokens or a 2FA required prompt.
+// @Tags         Auth
+// @Accept       json
+// @Produce      json
+// @Param        request body handler.Login.LoginRequest true "Login Credentials"
+// @Success      200  {object}  service.LoginStep1Response
+// @Failure      400  {object}  map[string]string
+// @Failure      401  {object}  map[string]string
 func (h *AuthHandler) Login(c *gin.Context) {
 	type LoginRequest struct {
 		Email    string `json:"email" binding:"required,email"`
@@ -80,6 +100,14 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// Profile godoc
+// @Summary      Get user profile
+// @Description  Retrieves basic information for the authenticated user.
+// @Tags         Auth
+// @Security     BearerAuth
+// @Produce      json
+// @Success      200  {object}  map[string]string
+// @Failure      401  {object}  map[string]string
 func (h *AuthHandler) Profile(c *gin.Context) {
 	userId, err := commonjwt.GetUserID(c)
 	if err != nil {
