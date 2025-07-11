@@ -289,6 +289,7 @@ func (s *authService) generateAccessToken(user *model.User) (string, error) {
 
 	claims := jwt.MapClaims{
 		"sub":   user.ID,
+		"tid":   user.TenantID,
 		"email": user.Email,
 		"role":  user.RoleName, // Using RoleName from the model
 		"iss":   "prism-app-issuer",
