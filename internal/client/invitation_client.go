@@ -22,8 +22,9 @@ type httpInvitationClient struct {
 }
 
 type InvitationData struct {
-	Email string `json:"email"`
-	Role  string `json:"role"`
+	Email    string `json:"email"`
+	Role     string `json:"role"`
+	TenantID string `json:"tenantID"`
 }
 
 func NewInvitationClient() InvitationClient {

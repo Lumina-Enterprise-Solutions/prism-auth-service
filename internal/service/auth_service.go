@@ -540,7 +540,6 @@ func (s *authService) RegisterWithInvitation(ctx context.Context, token, firstNa
 		Password:  string(hashedPassword),
 		FirstName: firstName,
 		LastName:  lastName,
-		Role:      invitationData.Role,
 	}
 
 	createdUser, err := s.userServiceClient.CreateUser(ctx, createUserReq)
