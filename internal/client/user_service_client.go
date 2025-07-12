@@ -64,8 +64,6 @@ func mapResponseToModel(res *userv1.UserAuthDetailsResponse) *model.User {
 		PasswordHash: res.PasswordHash,
 		RoleName:     res.RoleName,
 		Status:       res.Status,
-		Is2FAEnabled: res.Is_2FaEnabled,
-		TOTPSecret:   res.TotpSecret,
 	}
 }
 

@@ -205,6 +205,7 @@ func (s *authService) processSocialCallback(ctx context.Context, code string, co
 		Email:     userInfo.Email,
 		FirstName: userInfo.GivenName,
 		LastName:  userInfo.FamilyName,
+		// TODO: Regenerate protos and add TenantID here.
 	}
 	user, err := s.userServiceClient.CreateSocialUser(ctx, req)
 	if err != nil {
@@ -289,6 +290,7 @@ func (s *authService) generateAccessToken(user *model.User) (string, error) {
 
 	claims := jwt.MapClaims{
 		"sub":   user.ID,
+		"tid":   user.TenantID,
 		"email": user.Email,
 		"role":  user.RoleName, // Using RoleName from the model
 		"iss":   "prism-app-issuer",
@@ -539,7 +541,7 @@ func (s *authService) RegisterWithInvitation(ctx context.Context, token, firstNa
 		Password:  string(hashedPassword),
 		FirstName: firstName,
 		LastName:  lastName,
-		Role:      invitationData.Role,
+		// TODO: Regenerate protos and add TenantID: invitationData.TenantID here.
 	}
 
 	createdUser, err := s.userServiceClient.CreateUser(ctx, createUserReq)
