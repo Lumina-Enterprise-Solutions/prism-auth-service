@@ -28,6 +28,7 @@ import (
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/redis"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/repository"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/model"
+	tenantv1 "github.com/Lumina-Enterprise-Solutions/prism-protobufs/gen/go/prism/tenant/v1"
 	userv1 "github.com/Lumina-Enterprise-Solutions/prism-protobufs/gen/go/prism/user/v1"
 	"github.com/crewjam/saml/samlsp"
 	"github.com/golang-jwt/jwt/v5"
@@ -60,6 +61,7 @@ type AuthTokens struct {
 }
 
 type AuthService interface {
+	RegisterOrganization(ctx context.Context, req *tenantv1.CreateTenantWithAdminRequest) (*AuthTokens, error)
 	Register(ctx context.Context, user *model.User, password string) (string, error)
 	RegisterWithInvitation(ctx context.Context, token, firstName, lastName, password string) (*AuthTokens, error)
 	RefreshToken(ctx context.Context, refreshTokenString string) (*AuthTokens, error)
@@ -90,10 +92,11 @@ type authService struct {
 	invitationClient     client.InvitationClient
 	googleOAuthConfig    *oauth2.Config
 	microsoftOAuthConfig *oauth2.Config
+	tenantServiceClient  client.TenantServiceClient
 }
 
 // Constructor has changed to accept the new dependencies
-func NewAuthService(userClient client.UserServiceClient, tokenRepo repository.TokenRepository, apiKeyRepo repository.APIKeyRepository, passwordResetRepo repository.PasswordResetRepository) AuthService {
+func NewAuthService(userClient client.UserServiceClient, tokenRepo repository.TokenRepository, apiKeyRepo repository.APIKeyRepository, passwordResetRepo repository.PasswordResetRepository, tenantClient client.TenantServiceClient) AuthService {
 	googleOAuthConfig := &oauth2.Config{
 		RedirectURL:  "http://localhost:8000/auth/google/callback",
 		ClientID:     os.Getenv("GOOGLE_OAUTH_CLIENT_ID"),
@@ -125,6 +128,7 @@ func NewAuthService(userClient client.UserServiceClient, tokenRepo repository.To
 		passwordResetRepo:    passwordResetRepo,
 		notificationClient:   client.NewNotificationClient(), // This now returns an interface
 		invitationClient:     client.NewInvitationClient(),
+		tenantServiceClient:  tenantClient,
 		googleOAuthConfig:    googleOAuthConfig,
 		microsoftOAuthConfig: microsoftOAuthConfig,
 	}
@@ -142,6 +146,8 @@ func (s *authService) Register(ctx context.Context, user *model.User, password s
 		Password:  string(hashedPassword),
 		FirstName: user.FirstName,
 		LastName:  user.LastName,
+		// TODO: TenantID harus disediakan saat mendaftar.
+		// Ini akan menjadi perubahan di alur kerja selanjutnya.
 	}
 	createdUser, err := s.userServiceClient.CreateUser(ctx, req)
 	if err != nil {
@@ -601,4 +607,22 @@ func NewSAMLServiceProvider(cfg authconfig.SAMLConfig) (*samlsp.Middleware, erro
 	}
 
 	return samlSP, nil
+}
+func (s *authService) RegisterOrganization(ctx context.Context, req *tenantv1.CreateTenantWithAdminRequest) (*AuthTokens, error) {
+	// 1. Panggil tenant-service untuk membuat tenant dan admin.
+	// tenant-service akan mengembalikan detail user yang baru dibuat.
+	resp, err := s.tenantServiceClient.CreateTenantWithAdmin(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("gagal membuat organisasi: %w", err)
+	}
+
+	// 2. Gunakan response dari tenant-service untuk membuat token.
+	adminUser := &model.User{
+		ID:       resp.AdminUser.Id,
+		TenantID: resp.AdminUser.TenantId,
+		Email:    resp.AdminUser.Email,
+		RoleName: resp.AdminUser.RoleName,
+	}
+
+	return s.generateTokenPair(ctx, adminUser)
 }

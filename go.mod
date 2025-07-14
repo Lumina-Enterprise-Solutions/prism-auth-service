@@ -4,7 +4,7 @@ go 1.24.3
 
 require (
 	github.com/Lumina-Enterprise-Solutions/prism-common-libs v1.2.16
-	github.com/Lumina-Enterprise-Solutions/prism-protobufs v0.1.2
+	github.com/Lumina-Enterprise-Solutions/prism-protobufs v0.1.3
 	github.com/crewjam/saml v0.5.1
 	github.com/gin-contrib/pprof v1.5.3
 	github.com/gin-gonic/gin v1.10.1
