@@ -56,14 +56,16 @@ func (c *grpcUserServiceClient) Close() {
 	}
 }
 
-// PERBAIKAN: Nama tipe response diubah sesuai protobufs yang baru.
 func mapResponseToModel(res *userv1.UserAuthDetailsResponse) *model.User {
 	return &model.User{
 		ID:           res.Id,
+		TenantID:     res.TenantId, // <-- FIX: ADD THIS LINE
 		Email:        res.Email,
 		PasswordHash: res.PasswordHash,
 		RoleName:     res.RoleName,
 		Status:       res.Status,
+		Is2FAEnabled: res.Is_2FaEnabled, // Also good to map these for consistency
+		TOTPSecret:   res.TotpSecret,
 	}
 }
 

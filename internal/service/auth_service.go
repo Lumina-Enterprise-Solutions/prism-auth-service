@@ -27,6 +27,7 @@ import (
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/client"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/redis"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/repository"
+	commonauth "github.com/Lumina-Enterprise-Solutions/prism-common-libs/auth"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/model"
 	tenantv1 "github.com/Lumina-Enterprise-Solutions/prism-protobufs/gen/go/prism/tenant/v1"
 	userv1 "github.com/Lumina-Enterprise-Solutions/prism-protobufs/gen/go/prism/user/v1"
@@ -40,6 +41,7 @@ import (
 	"golang.org/x/oauth2/microsoft"
 	googleoauth "google.golang.org/api/oauth2/v2"
 	"google.golang.org/api/option"
+	"google.golang.org/grpc/metadata"
 )
 
 // Definisikan struct baru untuk response 2FA setup
@@ -72,7 +74,7 @@ type AuthService interface {
 	ProcessMicrosoftCallback(ctx context.Context, code string) (*AuthTokens, error)
 	Setup2FA(ctx context.Context, userID, email string) (*TwoFASetup, error)
 	VerifyAndEnable2FA(ctx context.Context, userID, totpSecret, code string) error
-	Login(ctx context.Context, email, password string) (*LoginStep1Response, error)
+	Login(ctx context.Context, email, password, organizationName string) (*LoginStep1Response, error)
 	VerifyLogin2FA(ctx context.Context, email, code string) (*AuthTokens, error)
 	ForgotPassword(ctx context.Context, email string) error
 	ResetPassword(ctx context.Context, token, newPassword string) error
@@ -160,12 +162,26 @@ func (s *authService) Register(ctx context.Context, user *model.User, password s
 	return createdUser.ID, nil
 }
 
-func (s *authService) Login(ctx context.Context, email, password string) (*LoginStep1Response, error) {
-	// Get user via gRPC
-	user, err := s.userServiceClient.GetUserAuthDetailsByEmail(ctx, email)
+func (s *authService) Login(ctx context.Context, email, password, organizationName string) (*LoginStep1Response, error) {
+	// 1. Dapatkan tenantID dari tenant-service berdasarkan nama organisasi
+	tenant, err := s.tenantServiceClient.GetTenantByName(ctx, organizationName)
 	if err != nil {
+		// Jika tenant tidak ditemukan, maka kredensial pasti tidak valid.
+		log.Printf("Login gagal: tenant '%s' tidak ditemukan. Error: %v", organizationName, err)
 		return nil, errors.New("invalid credentials")
 	}
+	tenantID := tenant.GetTenantId()
+
+	// 2. Buat context baru dengan tenantID untuk panggilan gRPC ke user-service
+	ctxWithTenant := metadata.NewOutgoingContext(ctx, metadata.Pairs(commonauth.TenantIDKey, tenantID))
+
+	// 3. Panggil user-service dengan context yang sudah berisi tenantID
+	user, err := s.userServiceClient.GetUserAuthDetailsByEmail(ctxWithTenant, email)
+	if err != nil {
+		log.Printf("Login gagal: user '%s' tidak ditemukan di tenant '%s'. Error: %v", email, organizationName, err)
+		return nil, errors.New("invalid credentials")
+	}
+
 	if user.Status != "active" {
 		return nil, fmt.Errorf("account is not active (status: %s)", user.Status)
 	}
@@ -179,7 +195,7 @@ func (s *authService) Login(ctx context.Context, email, password string) (*Login
 		return &LoginStep1Response{Is2FARequired: true}, nil
 	}
 
-	tokens, err := s.generateTokenPair(ctx, user)
+	tokens, err := s.generateTokenPair(ctx, user) // generateTokenPair sudah memasukkan tenantID ke token
 	if err != nil {
 		return nil, err
 	}

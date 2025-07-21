@@ -82,18 +82,20 @@ func (h *AuthHandler) Register(c *gin.Context) {
 // @Failure      400  {object}  map[string]string
 // @Failure      401  {object}  map[string]string
 func (h *AuthHandler) Login(c *gin.Context) {
+	// DIUBAH: Tambahkan OrganizationName
 	type LoginRequest struct {
-		Email    string `json:"email" binding:"required,email"`
-		Password string `json:"password" binding:"required"`
+		Email            string `json:"email" binding:"required,email"`
+		Password         string `json:"password" binding:"required"`
+		OrganizationName string `json:"organization_name" binding:"required"`
 	}
 	var req LoginRequest
-	// FIX: Filled in empty if block
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	resp, err := h.authService.Login(c.Request.Context(), req.Email, req.Password)
+	// DIUBAH: Teruskan organization name ke service
+	resp, err := h.authService.Login(c.Request.Context(), req.Email, req.Password, req.OrganizationName)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		return

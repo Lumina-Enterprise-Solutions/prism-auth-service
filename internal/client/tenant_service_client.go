@@ -11,8 +11,10 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// DIUBAH: Tambahkan metode baru ke interface
 type TenantServiceClient interface {
 	CreateTenantWithAdmin(ctx context.Context, req *tenantv1.CreateTenantWithAdminRequest) (*tenantv1.CreateTenantWithAdminResponse, error)
+	GetTenantByName(ctx context.Context, name string) (*tenantv1.Tenant, error)
 	Close()
 }
 
@@ -40,4 +42,10 @@ func (c *grpcTenantServiceClient) Close() {
 
 func (c *grpcTenantServiceClient) CreateTenantWithAdmin(ctx context.Context, req *tenantv1.CreateTenantWithAdminRequest) (*tenantv1.CreateTenantWithAdminResponse, error) {
 	return c.client.CreateTenantWithAdmin(ctx, req)
+}
+
+// BARU: Implementasikan metode baru untuk interface
+func (c *grpcTenantServiceClient) GetTenantByName(ctx context.Context, name string) (*tenantv1.Tenant, error) {
+	req := &tenantv1.GetTenantByNameRequest{Name: name}
+	return c.client.GetTenantByName(ctx, req)
 }
