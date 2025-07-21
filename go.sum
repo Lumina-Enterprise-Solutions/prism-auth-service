@@ -9,8 +9,8 @@ github.com/KyleBanks/depth v1.2.1 h1:5h8fQADFrWtarTdtDudMmGsC7GPbOAu6RVB3ffsVFHc
 github.com/KyleBanks/depth v1.2.1/go.mod h1:jzSb9d0L43HxTQfT+oSA1EEp2q+ne2uh6XgeJcm8brE=
 github.com/Lumina-Enterprise-Solutions/prism-common-libs v1.2.16 h1:/YBcKFdNb9qOqHYUpQvaLe4pgxGcx0VQIXdcy5Z+X1M=
 github.com/Lumina-Enterprise-Solutions/prism-common-libs v1.2.16/go.mod h1:eEwMVCslAJrFipZYsIE4DFMzNAd9qxo64Lg7qiC1bDs=
-github.com/Lumina-Enterprise-Solutions/prism-protobufs v0.1.2 h1:QfCY7DH4yKJxN2wudIY9GG2SQHEWGkzfk4jax8hwK0o=
-github.com/Lumina-Enterprise-Solutions/prism-protobufs v0.1.2/go.mod h1:yLQd4SSVCyz0dYHr39W3ujONZ+dQAnOYQwPU6BIVxpg=
+github.com/Lumina-Enterprise-Solutions/prism-protobufs v0.1.4 h1:gwQxrqPl3An+rTZg7ALvXCyyDVaSJDgeibJ6b55uCVg=
+github.com/Lumina-Enterprise-Solutions/prism-protobufs v0.1.4/go.mod h1:yLQd4SSVCyz0dYHr39W3ujONZ+dQAnOYQwPU6BIVxpg=
 github.com/alecthomas/template v0.0.0-20160405071501-a0175ee3bccc/go.mod h1:LOuyumcjzFXgccqObfd/Ljyb9UuFJ6TxHnclSeseNhc=
 github.com/alecthomas/template v0.0.0-20190718012654-fb15b899a751/go.mod h1:LOuyumcjzFXgccqObfd/Ljyb9UuFJ6TxHnclSeseNhc=
 github.com/alecthomas/units v0.0.0-20151022065526-2efee857e7cf/go.mod h1:ybxpYRFXyAe+OPACYpWeL0wqObRcbAqCMya13uyzqw0=

@@ -281,6 +281,21 @@ func main() {
 	// Repositori - Inisialisasi semua repository yang diperlukan
 	serviceLogger.Debug().Msg("Initializing repositories")
 
+	// BARU: Inisialisasi gRPC client ke tenant-service
+	serviceLogger.Debug().
+		Str("tenant_service_addr", "tenant-service:9003").
+		Msg("Creating tenant service client")
+	tenantServiceClient, err := authclient.NewTenantServiceClient("tenant-service:9003")
+	if err != nil {
+		serviceLogger.Fatal().Err(err).Msg("Gagal membuat tenant service client")
+	}
+	defer func() {
+		serviceLogger.Debug().Msg("Closing tenant service client")
+		tenantServiceClient.Close()
+		serviceLogger.Debug().Msg("Tenant service client closed successfully")
+	}()
+	serviceLogger.Info().Msg("Tenant service client created successfully")
+
 	tokenRepo := repository.NewPostgresTokenRepository(dbpool)
 	apiKeyRepo := repository.NewAPIKeyRepository(dbpool)
 	passwordResetRepo := repository.NewPostgresPasswordResetRepository(dbpool)
@@ -290,7 +305,7 @@ func main() {
 	// Service - Inisialisasi business logic service
 	serviceLogger.Debug().Msg("Initializing auth service")
 
-	authSvc := service.NewAuthService(userServiceClient, tokenRepo, apiKeyRepo, passwordResetRepo)
+	authSvc := service.NewAuthService(userServiceClient, tokenRepo, apiKeyRepo, passwordResetRepo, tenantServiceClient)
 
 	serviceLogger.Info().Msg("Auth service initialized successfully")
 
@@ -356,6 +371,7 @@ func main() {
 		authRoutes.GET("/health", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"status": "healthy"})
 		})
+		authRoutes.POST("/register/organization", authHandler.RegisterOrganization)
 		authRoutes.POST("/register/invite", authHandler.RegisterWithInvitation)
 		authRoutes.POST("/register", authHandler.Register)
 		authRoutes.POST("/login", authHandler.Login)

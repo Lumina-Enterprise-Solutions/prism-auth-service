@@ -10,9 +10,11 @@ import (
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/service"
 	commonjwt "github.com/Lumina-Enterprise-Solutions/prism-common-libs/auth"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/model"
+	tenantv1 "github.com/Lumina-Enterprise-Solutions/prism-protobufs/gen/go/prism/tenant/v1"
 	"github.com/crewjam/saml/samlsp"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type AuthHandler struct {
@@ -80,18 +82,20 @@ func (h *AuthHandler) Register(c *gin.Context) {
 // @Failure      400  {object}  map[string]string
 // @Failure      401  {object}  map[string]string
 func (h *AuthHandler) Login(c *gin.Context) {
+	// DIUBAH: Tambahkan OrganizationName
 	type LoginRequest struct {
-		Email    string `json:"email" binding:"required,email"`
-		Password string `json:"password" binding:"required"`
+		Email            string `json:"email" binding:"required,email"`
+		Password         string `json:"password" binding:"required"`
+		OrganizationName string `json:"organization_name" binding:"required"`
 	}
 	var req LoginRequest
-	// FIX: Filled in empty if block
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	resp, err := h.authService.Login(c.Request.Context(), req.Email, req.Password)
+	// DIUBAH: Teruskan organization name ke service
+	resp, err := h.authService.Login(c.Request.Context(), req.Email, req.Password, req.OrganizationName)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		return
@@ -377,4 +381,43 @@ func (h *AuthHandler) SAMLLogin(c *gin.Context) {
 func (h *AuthHandler) SAMLLogout(c *gin.Context) {
 	// Logika logout SAML yang lebih kompleks akan ditambahkan di sini.
 	c.JSON(http.StatusOK, gin.H{"message": "SAML logout initiated."})
+}
+func (h *AuthHandler) RegisterOrganization(c *gin.Context) {
+	var req struct {
+		OrganizationName string `json:"organization_name" binding:"required"`
+		AdminFirstName   string `json:"admin_first_name" binding:"required"`
+		AdminLastName    string `json:"admin_last_name" binding:"required"`
+		AdminEmail       string `json:"admin_email" binding:"required,email"`
+		Password         string `json:"password" binding:"required,min=8"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Hash password sebelum mengirimkannya ke service lain
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process password"})
+		return
+	}
+
+	// Buat request gRPC
+	grpcReq := &tenantv1.CreateTenantWithAdminRequest{
+		OrganizationName: req.OrganizationName,
+		AdminFirstName:   req.AdminFirstName,
+		AdminLastName:    req.AdminLastName,
+		AdminEmail:       req.AdminEmail,
+		PasswordHash:     string(hashedPassword),
+	}
+
+	tokens, err := h.authService.RegisterOrganization(c.Request.Context(), grpcReq)
+	if err != nil {
+		// TODO: Handle spesifik gRPC error codes (e.g., AlreadyExists)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create organization", "details": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, tokens)
 }

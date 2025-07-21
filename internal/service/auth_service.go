@@ -27,7 +27,9 @@ import (
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/client"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/redis"
 	"github.com/Lumina-Enterprise-Solutions/prism-auth-service/internal/repository"
+	commonauth "github.com/Lumina-Enterprise-Solutions/prism-common-libs/auth"
 	"github.com/Lumina-Enterprise-Solutions/prism-common-libs/model"
+	tenantv1 "github.com/Lumina-Enterprise-Solutions/prism-protobufs/gen/go/prism/tenant/v1"
 	userv1 "github.com/Lumina-Enterprise-Solutions/prism-protobufs/gen/go/prism/user/v1"
 	"github.com/crewjam/saml/samlsp"
 	"github.com/golang-jwt/jwt/v5"
@@ -39,6 +41,7 @@ import (
 	"golang.org/x/oauth2/microsoft"
 	googleoauth "google.golang.org/api/oauth2/v2"
 	"google.golang.org/api/option"
+	"google.golang.org/grpc/metadata"
 )
 
 // Definisikan struct baru untuk response 2FA setup
@@ -60,6 +63,7 @@ type AuthTokens struct {
 }
 
 type AuthService interface {
+	RegisterOrganization(ctx context.Context, req *tenantv1.CreateTenantWithAdminRequest) (*AuthTokens, error)
 	Register(ctx context.Context, user *model.User, password string) (string, error)
 	RegisterWithInvitation(ctx context.Context, token, firstName, lastName, password string) (*AuthTokens, error)
 	RefreshToken(ctx context.Context, refreshTokenString string) (*AuthTokens, error)
@@ -70,7 +74,7 @@ type AuthService interface {
 	ProcessMicrosoftCallback(ctx context.Context, code string) (*AuthTokens, error)
 	Setup2FA(ctx context.Context, userID, email string) (*TwoFASetup, error)
 	VerifyAndEnable2FA(ctx context.Context, userID, totpSecret, code string) error
-	Login(ctx context.Context, email, password string) (*LoginStep1Response, error)
+	Login(ctx context.Context, email, password, organizationName string) (*LoginStep1Response, error)
 	VerifyLogin2FA(ctx context.Context, email, code string) (*AuthTokens, error)
 	ForgotPassword(ctx context.Context, email string) error
 	ResetPassword(ctx context.Context, token, newPassword string) error
@@ -90,10 +94,11 @@ type authService struct {
 	invitationClient     client.InvitationClient
 	googleOAuthConfig    *oauth2.Config
 	microsoftOAuthConfig *oauth2.Config
+	tenantServiceClient  client.TenantServiceClient
 }
 
 // Constructor has changed to accept the new dependencies
-func NewAuthService(userClient client.UserServiceClient, tokenRepo repository.TokenRepository, apiKeyRepo repository.APIKeyRepository, passwordResetRepo repository.PasswordResetRepository) AuthService {
+func NewAuthService(userClient client.UserServiceClient, tokenRepo repository.TokenRepository, apiKeyRepo repository.APIKeyRepository, passwordResetRepo repository.PasswordResetRepository, tenantClient client.TenantServiceClient) AuthService {
 	googleOAuthConfig := &oauth2.Config{
 		RedirectURL:  "http://localhost:8000/auth/google/callback",
 		ClientID:     os.Getenv("GOOGLE_OAUTH_CLIENT_ID"),
@@ -125,6 +130,7 @@ func NewAuthService(userClient client.UserServiceClient, tokenRepo repository.To
 		passwordResetRepo:    passwordResetRepo,
 		notificationClient:   client.NewNotificationClient(), // This now returns an interface
 		invitationClient:     client.NewInvitationClient(),
+		tenantServiceClient:  tenantClient,
 		googleOAuthConfig:    googleOAuthConfig,
 		microsoftOAuthConfig: microsoftOAuthConfig,
 	}
@@ -142,6 +148,8 @@ func (s *authService) Register(ctx context.Context, user *model.User, password s
 		Password:  string(hashedPassword),
 		FirstName: user.FirstName,
 		LastName:  user.LastName,
+		// TODO: TenantID harus disediakan saat mendaftar.
+		// Ini akan menjadi perubahan di alur kerja selanjutnya.
 	}
 	createdUser, err := s.userServiceClient.CreateUser(ctx, req)
 	if err != nil {
@@ -154,12 +162,26 @@ func (s *authService) Register(ctx context.Context, user *model.User, password s
 	return createdUser.ID, nil
 }
 
-func (s *authService) Login(ctx context.Context, email, password string) (*LoginStep1Response, error) {
-	// Get user via gRPC
-	user, err := s.userServiceClient.GetUserAuthDetailsByEmail(ctx, email)
+func (s *authService) Login(ctx context.Context, email, password, organizationName string) (*LoginStep1Response, error) {
+	// 1. Dapatkan tenantID dari tenant-service berdasarkan nama organisasi
+	tenant, err := s.tenantServiceClient.GetTenantByName(ctx, organizationName)
 	if err != nil {
+		// Jika tenant tidak ditemukan, maka kredensial pasti tidak valid.
+		log.Printf("Login gagal: tenant '%s' tidak ditemukan. Error: %v", organizationName, err)
 		return nil, errors.New("invalid credentials")
 	}
+	tenantID := tenant.GetTenantId()
+
+	// 2. Buat context baru dengan tenantID untuk panggilan gRPC ke user-service
+	ctxWithTenant := metadata.NewOutgoingContext(ctx, metadata.Pairs(commonauth.TenantIDKey, tenantID))
+
+	// 3. Panggil user-service dengan context yang sudah berisi tenantID
+	user, err := s.userServiceClient.GetUserAuthDetailsByEmail(ctxWithTenant, email)
+	if err != nil {
+		log.Printf("Login gagal: user '%s' tidak ditemukan di tenant '%s'. Error: %v", email, organizationName, err)
+		return nil, errors.New("invalid credentials")
+	}
+
 	if user.Status != "active" {
 		return nil, fmt.Errorf("account is not active (status: %s)", user.Status)
 	}
@@ -173,7 +195,7 @@ func (s *authService) Login(ctx context.Context, email, password string) (*Login
 		return &LoginStep1Response{Is2FARequired: true}, nil
 	}
 
-	tokens, err := s.generateTokenPair(ctx, user)
+	tokens, err := s.generateTokenPair(ctx, user) // generateTokenPair sudah memasukkan tenantID ke token
 	if err != nil {
 		return nil, err
 	}
@@ -601,4 +623,22 @@ func NewSAMLServiceProvider(cfg authconfig.SAMLConfig) (*samlsp.Middleware, erro
 	}
 
 	return samlSP, nil
+}
+func (s *authService) RegisterOrganization(ctx context.Context, req *tenantv1.CreateTenantWithAdminRequest) (*AuthTokens, error) {
+	// 1. Panggil tenant-service untuk membuat tenant dan admin.
+	// tenant-service akan mengembalikan detail user yang baru dibuat.
+	resp, err := s.tenantServiceClient.CreateTenantWithAdmin(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("gagal membuat organisasi: %w", err)
+	}
+
+	// 2. Gunakan response dari tenant-service untuk membuat token.
+	adminUser := &model.User{
+		ID:       resp.AdminUser.Id,
+		TenantID: resp.AdminUser.TenantId,
+		Email:    resp.AdminUser.Email,
+		RoleName: resp.AdminUser.RoleName,
+	}
+
+	return s.generateTokenPair(ctx, adminUser)
 }
